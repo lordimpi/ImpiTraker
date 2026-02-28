@@ -20,7 +20,9 @@ public sealed class InMemorySessionManager : ISessionManager
             RemoteIp = remoteIp,
             Port = port,
             ConnectedAtUtc = DateTimeOffset.UtcNow,
-            LastSeenAtUtc = DateTimeOffset.UtcNow
+            LastSeenAtUtc = DateTimeOffset.UtcNow,
+            FramesIn = 0,
+            FramesInvalid = 0
         };
 
         _sessions[sessionId.Value] = state;
@@ -51,6 +53,42 @@ public sealed class InMemorySessionManager : ISessionManager
     }
 
     /// <inheritdoc />
+    public void MarkHeartbeat(SessionId sessionId)
+    {
+        if (_sessions.TryGetValue(sessionId.Value, out SessionState? session))
+        {
+            session.LastHeartbeatAtUtc = DateTimeOffset.UtcNow;
+        }
+    }
+
+    /// <inheritdoc />
+    public void IncrementFramesIn(SessionId sessionId)
+    {
+        if (_sessions.TryGetValue(sessionId.Value, out SessionState? session))
+        {
+            session.FramesIn++;
+        }
+    }
+
+    /// <inheritdoc />
+    public void IncrementFramesInvalid(SessionId sessionId)
+    {
+        if (_sessions.TryGetValue(sessionId.Value, out SessionState? session))
+        {
+            session.FramesInvalid++;
+        }
+    }
+
+    /// <inheritdoc />
+    public void SetCloseReason(SessionId sessionId, string closeReason)
+    {
+        if (_sessions.TryGetValue(sessionId.Value, out SessionState? session))
+        {
+            session.CloseReason = closeReason;
+        }
+    }
+
+    /// <inheritdoc />
     public bool TryGet(SessionId sessionId, out SessionState? session)
     {
         return _sessions.TryGetValue(sessionId.Value, out session);
@@ -59,6 +97,12 @@ public sealed class InMemorySessionManager : ISessionManager
     /// <inheritdoc />
     public bool Close(SessionId sessionId)
     {
-        return _sessions.TryRemove(sessionId.Value, out _);
+        if (!_sessions.TryRemove(sessionId.Value, out SessionState? session))
+        {
+            return false;
+        }
+
+        session.DisconnectedAtUtc = DateTimeOffset.UtcNow;
+        return true;
     }
 }

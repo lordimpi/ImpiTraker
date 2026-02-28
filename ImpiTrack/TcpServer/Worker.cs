@@ -1,14 +1,17 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using ImpiTrack.Observability;
+using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.Correlation;
 using ImpiTrack.Tcp.Core.Framing;
 using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
+using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
 using Microsoft.Extensions.Options;
 
@@ -27,6 +30,9 @@ public sealed class Worker : BackgroundService
     private readonly IInboundQueue _inboundQueue;
     private readonly ISessionManager _sessionManager;
     private readonly IPacketIdGenerator _packetIdGenerator;
+    private readonly IOpsDataStore _opsDataStore;
+    private readonly IAbuseGuard _abuseGuard;
+    private readonly ITcpMetrics _tcpMetrics;
 
     /// <summary>
     /// Crea el worker de ingesta TCP y sus dependencias de runtime.
@@ -39,6 +45,9 @@ public sealed class Worker : BackgroundService
     /// <param name="inboundQueue">Cola entrante acotada.</param>
     /// <param name="sessionManager">Administrador de estado de sesiones.</param>
     /// <param name="packetIdGenerator">Generador de id de paquete.</param>
+    /// <param name="opsDataStore">Almacen de diagnostico operativo.</param>
+    /// <param name="abuseGuard">Control de abuso por IP.</param>
+    /// <param name="tcpMetrics">Publicador de metricas TCP.</param>
     public Worker(
         ILogger<Worker> logger,
         IOptions<TcpServerOptions> options,
@@ -47,7 +56,10 @@ public sealed class Worker : BackgroundService
         IEnumerable<IAckStrategy> ackStrategies,
         IInboundQueue inboundQueue,
         ISessionManager sessionManager,
-        IPacketIdGenerator packetIdGenerator)
+        IPacketIdGenerator packetIdGenerator,
+        IOpsDataStore opsDataStore,
+        IAbuseGuard abuseGuard,
+        ITcpMetrics tcpMetrics)
     {
         _logger = logger;
         _options = options.Value;
@@ -57,6 +69,9 @@ public sealed class Worker : BackgroundService
         _inboundQueue = inboundQueue;
         _sessionManager = sessionManager;
         _packetIdGenerator = packetIdGenerator;
+        _opsDataStore = opsDataStore;
+        _abuseGuard = abuseGuard;
+        _tcpMetrics = tcpMetrics;
     }
 
     /// <summary>
@@ -120,6 +135,10 @@ public sealed class Worker : BackgroundService
         IFrameDecoder frameDecoder = CreateDecoderForEndpoint(endpoint);
         DateTimeOffset connectedAt = session.ConnectedAtUtc;
         bool firstFrameReceived = false;
+        string closeReason = "remote_closed";
+
+        _tcpMetrics.RecordConnectionOpened(endpoint.Port);
+        _opsDataStore.UpsertSession(ToSessionRecord(session, isActive: true));
 
         _logger.LogInformation(
             "session_open sessionId={sessionId} remoteIp={remoteIp} port={port}",
@@ -137,8 +156,47 @@ public sealed class Worker : BackgroundService
 
                 while (!serverToken.IsCancellationRequested)
                 {
+                    if (_abuseGuard.IsBlocked(remoteIp, DateTimeOffset.UtcNow, out DateTimeOffset? blockedUntil))
+                    {
+                        closeReason = "abuse_blocked_ip";
+                        _sessionManager.SetCloseReason(session.SessionId, closeReason);
+                        _logger.LogWarning(
+                            "session_blocked sessionId={sessionId} remoteIp={remoteIp} port={port} blockedUntil={blockedUntil}",
+                            session.SessionId,
+                            remoteIp,
+                            endpoint.Port,
+                            blockedUntil);
+                        break;
+                    }
+
                     using var readCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
-                    readCts.CancelAfter(TimeSpan.FromSeconds(_options.Socket.ReadTimeoutSeconds));
+                    TimeSpan readTimeout = TimeSpan.FromSeconds(_options.Socket.ReadTimeoutSeconds);
+                    if (!firstFrameReceived)
+                    {
+                        TimeSpan handshakeBudget =
+                            TimeSpan.FromSeconds(_options.Socket.HandshakeTimeoutSeconds) -
+                            (DateTimeOffset.UtcNow - connectedAt);
+                        if (handshakeBudget <= TimeSpan.Zero)
+                        {
+                            closeReason = "handshake_timeout";
+                            _sessionManager.SetCloseReason(session.SessionId, closeReason);
+                            _logger.LogWarning(
+                                "session_handshake_timeout sessionId={sessionId} remoteIp={remoteIp} port={port}",
+                                session.SessionId,
+                                remoteIp,
+                                endpoint.Port);
+                            break;
+                        }
+
+                        readTimeout = handshakeBudget < readTimeout ? handshakeBudget : readTimeout;
+                    }
+
+                    if (readTimeout < TimeSpan.FromMilliseconds(200))
+                    {
+                        readTimeout = TimeSpan.FromMilliseconds(200);
+                    }
+
+                    readCts.CancelAfter(readTimeout);
 
                     ReadResult result;
                     try
@@ -147,6 +205,8 @@ public sealed class Worker : BackgroundService
                     }
                     catch (OperationCanceledException) when (!serverToken.IsCancellationRequested)
                     {
+                        closeReason = "read_timeout";
+                        _sessionManager.SetCloseReason(session.SessionId, closeReason);
                         _logger.LogWarning(
                             "session_read_timeout sessionId={sessionId} remoteIp={remoteIp} port={port}",
                             session.SessionId,
@@ -160,12 +220,34 @@ public sealed class Worker : BackgroundService
                     {
                         firstFrameReceived = true;
                         _sessionManager.Touch(session.SessionId);
+                        _sessionManager.IncrementFramesIn(session.SessionId);
 
                         PacketId packetId = _packetIdGenerator.Next();
                         ProtocolId protocol = _protocolResolver.Resolve(endpoint.Port, FramePreview(frame.Payload));
+                        _tcpMetrics.RecordFrameReceived(endpoint.Port, protocol);
 
                         if (!_parsers.TryGetValue(protocol, out IProtocolParser? parser))
                         {
+                            RegisterInvalidFrame(remoteIp, endpoint.Port, protocol, session.SessionId);
+                            _opsDataStore.AddRawPacket(
+                                new RawPacketRecord(
+                                    session.SessionId,
+                                    packetId,
+                                    endpoint.Port,
+                                    remoteIp,
+                                    protocol,
+                                    null,
+                                    MessageType.Unknown,
+                                    ReadText(frame.Payload),
+                                    frame.ReceivedAtUtc,
+                                    RawParseStatus.Failed,
+                                    "parse_no_parser",
+                                    false,
+                                    null,
+                                    null,
+                                    null),
+                                _inboundQueue.Backlog);
+
                             _logger.LogWarning(
                                 "parse_skip_no_parser sessionId={sessionId} packetId={packetId} protocol={protocol} port={port}",
                                 session.SessionId,
@@ -177,6 +259,26 @@ public sealed class Worker : BackgroundService
 
                         if (!parser.TryParse(frame, out ParsedMessage? parsed, out string? parseError) || parsed is null)
                         {
+                            RegisterInvalidFrame(remoteIp, endpoint.Port, protocol, session.SessionId);
+                            _opsDataStore.AddRawPacket(
+                                new RawPacketRecord(
+                                    session.SessionId,
+                                    packetId,
+                                    endpoint.Port,
+                                    remoteIp,
+                                    protocol,
+                                    null,
+                                    MessageType.Unknown,
+                                    ReadText(frame.Payload),
+                                    frame.ReceivedAtUtc,
+                                    RawParseStatus.Failed,
+                                    parseError ?? "unknown_parse_error",
+                                    false,
+                                    null,
+                                    null,
+                                    null),
+                                _inboundQueue.Backlog);
+
                             _logger.LogWarning(
                                 "parse_fail sessionId={sessionId} packetId={packetId} protocol={protocol} port={port} error={error}",
                                 session.SessionId,
@@ -187,15 +289,31 @@ public sealed class Worker : BackgroundService
                             continue;
                         }
 
+                        _abuseGuard.RegisterFrame(remoteIp, isInvalid: false, DateTimeOffset.UtcNow);
+                        _tcpMetrics.RecordParseResult(endpoint.Port, parsed.Protocol, success: true);
+
                         _sessionManager.AttachImei(session.SessionId, parsed.Imei);
+                        if (parsed.MessageType == MessageType.Heartbeat)
+                        {
+                            _sessionManager.MarkHeartbeat(session.SessionId);
+                        }
+
+                        bool ackSent = false;
+                        DateTimeOffset? ackAtUtc = null;
+                        double? ackLatencyMs = null;
+                        string? ackPayload = null;
 
                         if (_ackStrategies.TryGetValue(parsed.Protocol, out IAckStrategy? ackStrategy) &&
                             ackStrategy.TryBuildAck(parsed, out ReadOnlyMemory<byte> ackBytes))
                         {
                             DateTimeOffset ackStarted = DateTimeOffset.UtcNow;
                             await stream.WriteAsync(ackBytes, serverToken);
-                            double ackLatencyMs = (DateTimeOffset.UtcNow - ackStarted).TotalMilliseconds;
+                            ackLatencyMs = (DateTimeOffset.UtcNow - ackStarted).TotalMilliseconds;
+                            ackAtUtc = DateTimeOffset.UtcNow;
+                            ackPayload = Truncate(ReadText(ackBytes), 200);
+                            ackSent = true;
 
+                            _tcpMetrics.RecordAck(endpoint.Port, parsed.Protocol, ackLatencyMs.Value);
                             _logger.LogInformation(
                                 "ack_sent sessionId={sessionId} packetId={packetId} protocol={protocol} messageType={messageType} imei={imei} port={port} latencyMs={latencyMs}",
                                 session.SessionId,
@@ -206,6 +324,25 @@ public sealed class Worker : BackgroundService
                                 endpoint.Port,
                                 ackLatencyMs);
                         }
+
+                        _opsDataStore.AddRawPacket(
+                            new RawPacketRecord(
+                                session.SessionId,
+                                packetId,
+                                endpoint.Port,
+                                remoteIp,
+                                parsed.Protocol,
+                                parsed.Imei,
+                                parsed.MessageType,
+                                parsed.Text,
+                                parsed.ReceivedAtUtc,
+                                RawParseStatus.Ok,
+                                null,
+                                ackSent,
+                                ackPayload,
+                                ackAtUtc,
+                                ackLatencyMs),
+                            _inboundQueue.Backlog);
 
                         await _inboundQueue.EnqueueAsync(
                             new InboundEnvelope(
@@ -226,11 +363,19 @@ public sealed class Worker : BackgroundService
                             parsed.Imei ?? "n/a",
                             endpoint.Port,
                             _inboundQueue.Backlog);
+
+                        if (_sessionManager.TryGet(session.SessionId, out SessionState? currentSession) &&
+                            currentSession is not null)
+                        {
+                            _opsDataStore.UpsertSession(ToSessionRecord(currentSession, isActive: true));
+                        }
                     }
 
                     if (!firstFrameReceived &&
                         DateTimeOffset.UtcNow - connectedAt > TimeSpan.FromSeconds(_options.Socket.HandshakeTimeoutSeconds))
                     {
+                        closeReason = "handshake_timeout";
+                        _sessionManager.SetCloseReason(session.SessionId, closeReason);
                         _logger.LogWarning(
                             "session_handshake_timeout sessionId={sessionId} remoteIp={remoteIp} port={port}",
                             session.SessionId,
@@ -243,6 +388,8 @@ public sealed class Worker : BackgroundService
                         current is not null &&
                         DateTimeOffset.UtcNow - current.LastSeenAtUtc > TimeSpan.FromSeconds(_options.Socket.IdleTimeoutSeconds))
                     {
+                        closeReason = "idle_timeout";
+                        _sessionManager.SetCloseReason(session.SessionId, closeReason);
                         _logger.LogWarning(
                             "session_idle_timeout sessionId={sessionId} remoteIp={remoteIp} port={port}",
                             session.SessionId,
@@ -255,6 +402,8 @@ public sealed class Worker : BackgroundService
 
                     if (result.IsCompleted)
                     {
+                        closeReason = "remote_closed";
+                        _sessionManager.SetCloseReason(session.SessionId, closeReason);
                         break;
                     }
                 }
@@ -264,6 +413,29 @@ public sealed class Worker : BackgroundService
         }
         catch (InvalidDataException ex)
         {
+            closeReason = "frame_rejected";
+            _sessionManager.SetCloseReason(session.SessionId, closeReason);
+            RegisterInvalidFrame(remoteIp, endpoint.Port, ProtocolId.Unknown, session.SessionId);
+
+            _opsDataStore.AddRawPacket(
+                new RawPacketRecord(
+                    session.SessionId,
+                    _packetIdGenerator.Next(),
+                    endpoint.Port,
+                    remoteIp,
+                    ProtocolId.Unknown,
+                    null,
+                    MessageType.Unknown,
+                    string.Empty,
+                    DateTimeOffset.UtcNow,
+                    RawParseStatus.Rejected,
+                    ex.Message,
+                    false,
+                    null,
+                    null,
+                    null),
+                _inboundQueue.Backlog);
+
             _logger.LogWarning(
                 ex,
                 "frame_rejected sessionId={sessionId} remoteIp={remoteIp} port={port}",
@@ -273,6 +445,8 @@ public sealed class Worker : BackgroundService
         }
         catch (OperationCanceledException) when (serverToken.IsCancellationRequested)
         {
+            closeReason = "server_shutdown";
+            _sessionManager.SetCloseReason(session.SessionId, closeReason);
             _logger.LogInformation(
                 "session_canceled sessionId={sessionId} remoteIp={remoteIp} port={port}",
                 session.SessionId,
@@ -281,6 +455,8 @@ public sealed class Worker : BackgroundService
         }
         catch (Exception ex)
         {
+            closeReason = "session_error";
+            _sessionManager.SetCloseReason(session.SessionId, closeReason);
             _logger.LogError(
                 ex,
                 "session_error sessionId={sessionId} remoteIp={remoteIp} port={port}",
@@ -290,13 +466,35 @@ public sealed class Worker : BackgroundService
         }
         finally
         {
+            if (_sessionManager.TryGet(session.SessionId, out SessionState? openSession) &&
+                openSession is not null)
+            {
+                openSession.DisconnectedAtUtc = DateTimeOffset.UtcNow;
+                openSession.CloseReason ??= closeReason;
+                _opsDataStore.UpsertSession(ToSessionRecord(openSession, isActive: false));
+            }
+
             _sessionManager.Close(session.SessionId);
+            _tcpMetrics.RecordConnectionClosed(endpoint.Port);
             _logger.LogInformation(
-                "session_closed sessionId={sessionId} remoteIp={remoteIp} port={port}",
+                "session_closed sessionId={sessionId} remoteIp={remoteIp} port={port} reason={reason}",
                 session.SessionId,
                 remoteIp,
-                endpoint.Port);
+                endpoint.Port,
+                closeReason);
         }
+    }
+
+    private void RegisterInvalidFrame(
+        string remoteIp,
+        int port,
+        ProtocolId protocol,
+        SessionId sessionId)
+    {
+        _abuseGuard.RegisterFrame(remoteIp, isInvalid: true, DateTimeOffset.UtcNow);
+        _sessionManager.IncrementFramesInvalid(sessionId);
+        _tcpMetrics.RecordFrameInvalid(port, protocol);
+        _tcpMetrics.RecordParseResult(port, protocol, success: false);
     }
 
     private static ReadOnlySpan<byte> FramePreview(ReadOnlyMemory<byte> payload)
@@ -317,5 +515,42 @@ public sealed class Worker : BackgroundService
         };
 
         return new DelimiterFrameDecoder(delimiters, _options.Socket.MaxFrameBytes);
+    }
+
+    private static string ReadText(ReadOnlyMemory<byte> payload)
+    {
+        if (payload.IsEmpty)
+        {
+            return string.Empty;
+        }
+
+        return Encoding.ASCII.GetString(payload.Span);
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value[..maxLength];
+    }
+
+    private static SessionRecord ToSessionRecord(SessionState state, bool isActive)
+    {
+        return new SessionRecord(
+            state.SessionId,
+            state.RemoteIp,
+            state.Port,
+            state.ConnectedAtUtc,
+            state.LastSeenAtUtc,
+            state.LastHeartbeatAtUtc,
+            state.Imei,
+            state.FramesIn,
+            state.FramesInvalid,
+            state.CloseReason,
+            state.DisconnectedAtUtc,
+            isActive);
     }
 }

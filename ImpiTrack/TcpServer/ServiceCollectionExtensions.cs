@@ -1,10 +1,13 @@
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Protocols.Cantrack;
 using ImpiTrack.Protocols.Coban;
+using ImpiTrack.Observability;
+using ImpiTrack.Ops;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.Correlation;
 using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
+using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
 using Microsoft.Extensions.Options;
 
@@ -29,6 +32,13 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ISessionManager, InMemorySessionManager>();
         services.AddSingleton<IPacketIdGenerator, GuidPacketIdGenerator>();
+        services.AddSingleton<IOpsDataStore, InMemoryOpsDataStore>();
+        services.AddSingleton<ITcpMetrics, TcpMetrics>();
+        services.AddSingleton<IAbuseGuard>(sp =>
+        {
+            TcpServerOptions options = sp.GetRequiredService<IOptions<TcpServerOptions>>().Value;
+            return new InMemoryAbuseGuard(options.Security);
+        });
 
         services.AddSingleton<IProtocolResolver>(sp =>
         {

@@ -29,6 +29,31 @@ public interface ISessionManager
     void AttachImei(SessionId sessionId, string? imei);
 
     /// <summary>
+    /// Marca que la sesion recibio un heartbeat valido.
+    /// </summary>
+    /// <param name="sessionId">Identificador de sesion.</param>
+    void MarkHeartbeat(SessionId sessionId);
+
+    /// <summary>
+    /// Incrementa el contador de frames recibidos para una sesion.
+    /// </summary>
+    /// <param name="sessionId">Identificador de sesion.</param>
+    void IncrementFramesIn(SessionId sessionId);
+
+    /// <summary>
+    /// Incrementa el contador de frames invalidos para una sesion.
+    /// </summary>
+    /// <param name="sessionId">Identificador de sesion.</param>
+    void IncrementFramesInvalid(SessionId sessionId);
+
+    /// <summary>
+    /// Asigna un motivo de cierre a una sesion.
+    /// </summary>
+    /// <param name="sessionId">Identificador de sesion.</param>
+    /// <param name="closeReason">Codigo de motivo de cierre.</param>
+    void SetCloseReason(SessionId sessionId, string closeReason);
+
+    /// <summary>
     /// Obtiene el estado de sesion por identificador.
     /// </summary>
     /// <param name="sessionId">Identificador de sesion.</param>

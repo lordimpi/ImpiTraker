@@ -24,4 +24,9 @@ public sealed class TcpServerOptions
     /// Configuracion de cola entrante y workers consumidores.
     /// </summary>
     public TcpPipelineOptions Pipeline { get; set; } = new();
+
+    /// <summary>
+    /// Configuracion de seguridad y mitigacion de abuso por IP.
+    /// </summary>
+    public TcpSecurityOptions Security { get; set; } = new();
 }

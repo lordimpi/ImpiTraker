@@ -17,5 +17,6 @@
     <ProjectReference Include="..\ImpiTrack.Protocols.Coban\ImpiTrack.Protocols.Coban.csproj" />
     <ProjectReference Include="..\ImpiTrack.Protocols.Cantrack\ImpiTrack.Protocols.Cantrack.csproj" />
     <ProjectReference Include="..\ImpiTrack.Observability\ImpiTrack.Observability.csproj" />
+    <ProjectReference Include="..\ImpiTrack.Ops\ImpiTrack.Ops.csproj" />
   </ItemGroup>
 </Project>

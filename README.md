@@ -1,12 +1,13 @@
-# IMPITrack — Documentación Técnica (Arquitectura + DDD Light + Protocolos + Roadmap)
+# IMPITrack — Documentación Técnica (Backend)  
+**Arquitectura + DDD Light + Worker TCP + Web API (Ops/Toolbox) + Protocolos + Roadmap**
 
 > **Stack objetivo (2026):**  
-> **Backend:** .NET 10 (**Worker TCP** + **Web API**), SignalR, Serilog, OpenTelemetry  
-> **Frontend:** Angular **21**  
+> **Backend:** .NET 10 (**Worker TCP** + **Web API**), SignalR (futuro), Serilog, OpenTelemetry  
+> **Frontend:** (fuera de este repo / proyecto aparte)  
 > **Data:** SQL Server + PostgreSQL (según módulo / entorno)  
 > **Infra:** GCP (Compute Engine o GKE), NGINX, Redis (backplane + cache), opcional Pub/Sub  
 >
-> **Propósito:** Plataforma empresarial para **ingestión, normalización, almacenamiento y visualización** de telemetría GPS **multi-dispositivo** y **multi-protocolo**, con **tiempo real** y trazabilidad de payloads.
+> **Propósito:** Plataforma empresarial para **ingestión, normalización, almacenamiento y visualización** de telemetría GPS **multi-dispositivo** y **multi-protocolo**, con **tiempo real** (futuro) y trazabilidad de payloads.
 
 ---
 
@@ -35,7 +36,7 @@
 
 ## 1. Visión y objetivos
 
-**IMPITrack** recibe mensajes GPS desde dispositivos vía **GPRS/TCP**, valida identidad (IMEI), **normaliza** (parseo por protocolo), **persiste** (posiciones/eventos/raw) y expone al frontend (mapas + dashboards) con **actualización en tiempo real**.
+**IMPITrack** recibe mensajes GPS desde dispositivos vía **GPRS/TCP**, valida identidad (IMEI), **normaliza** (parseo por protocolo), **persiste** (posiciones/eventos/raw) y expone al backend (API) funcionalidades de consulta y operación con **diagnóstico de producción** (Ops/Toolbox).
 
 ### Objetivos no funcionales
 
@@ -46,6 +47,7 @@
 - **Modularidad:** parsers por protocolo como ACL (Anti-Corruption Layer).
 - **Seguridad:** IMEI autorizado (TCP) + JWT/roles (API).
 - **Operabilidad:** logs estructurados, métricas, health checks, alertas.
+- **Documentación:** APIs públicas documentadas con **XML documentation**.
 
 ---
 
@@ -55,9 +57,10 @@
 - Ingestión TCP multi-puerto multi-protocolo
 - Parsers Coban/TK y Cantrack/G06L (base inicial)
 - Persistencia de posiciones, eventos, sesiones y raw
-- Web API lectura (y luego administración)
-- Frontend Angular para mapa + realtime
+- Web API lectura + administración + Ops/Toolbox
 - Observabilidad completa desde el día 1
+
+> El frontend se desarrolla como **proyecto aparte** (Angular) y no se aborda en este documento.
 
 ### 2.2 No alcance inmediato (pero diseñado para)
 - Streaming (Kafka / Pub/Sub / Redis Streams) para desacople fuerte
@@ -94,21 +97,22 @@ Worker TCP (BackgroundService / Worker Service)
                ▼
 Web API (.NET 10)
       │
-      ├──► SignalR (Realtime al Frontend Angular)
+      ├──► Ops/Toolbox (diagnóstico sin UI)
       ├──► Auth (JWT)
       ├──► Admin/Devices/Queries
+      ├──► (Futuro) SignalR
       └──► Observabilidad (Serilog + OTel)
 ```
 
 ### 3.2 Reglas de acoplamiento
 - Worker TCP **NO** debe llamar a la Web API para validar IMEI o persistir.  
   - Validación IMEI preferida: **cache + DB** (evita caer si API cae).
-- La Web API **consume DB** (y opcionalmente bus) para “empujar” realtime.
+- La Web API **consume DB** (y opcionalmente bus/outbox) para diagnósticos, consultas y (futuro) realtime.
 
 ### 3.3 Escalado
 - Worker TCP: horizontal por **puerto** (preferido) o por **LB TCP** (avanzado).
 - Web API: horizontal libre.
-- SignalR: requiere **backplane** (Redis) si hay múltiples instancias.
+- SignalR (futuro): requiere **backplane** (Redis) si hay múltiples instancias.
 
 ---
 
@@ -118,7 +122,7 @@ Web API (.NET 10)
 Arranque como **modular monolith** (proyectos separados), listo para:
 - Worker TCP (servicio independiente)
 - Web API (servicio independiente)
-- Event bus para desacoplar ingestión/persistencia/realtime
+- Event bus/outbox para desacoplar ingestión/persistencia/realtime
 
 ### 4.2 Multi-puerto por HostedServices
 Un `BackgroundService` por puerto/listener:
@@ -196,12 +200,9 @@ Propuesta:
 
 5) **IMPITrack.Api**
 - Web API .NET 10
-- Auth JWT, endpoints, SignalR hub, swagger
+- Auth JWT, endpoints, swagger
+- Ops/Toolbox endpoints `/api/ops/*`
 - Queries optimizadas
-
-6) **IMPITrack.Frontend**
-- Angular 21
-- Mapa, dashboards, realtime, admin
 
 ---
 
@@ -309,7 +310,7 @@ Regla operativa:
 
 ## 9. Web API
 
-### 9.1 Endpoints propuestos
+### 9.1 Endpoints propuestos (negocio)
 
 **Devices**
 - `GET /api/devices`
@@ -340,6 +341,7 @@ Regla operativa:
 ---
 
 ## 10. SignalR (Tiempo real)
+*(futuro, backend)*
 
 - Rooms:
   - `device:{imei}`
@@ -349,8 +351,7 @@ Regla operativa:
   - `DeviceEvent`
   - `DeviceOnline` / `DeviceOffline`
 
-**Escalado:** Redis backplane si hay múltiples instancias.
-
+**Escalado:** Redis backplane si hay múltiples instancias.  
 **Fuente de eventos:** polling → outbox → bus (evolutivo).
 
 ---
@@ -372,16 +373,21 @@ Regla operativa:
 - `RemoteIp`, `Port`
 - `LastSeenAtUtc`, `LastHeartbeatAtUtc`
 - `CloseReason` (nullable)
+- `FramesIn`, `FramesInvalid` (recomendado)
 
 ### 11.3 `RawPackets`
 - `PacketId` (PK uuid)
 - `SessionId` (FK)
 - `DeviceId` (nullable)
+- `Imei` (nullable, recomendado)
 - `Protocol`
+- `Port`, `RemoteIp`
 - `ReceivedAtUtc`
 - `PayloadText` o `PayloadBytes`
 - `PayloadHash` (opcional)
 - `ParseStatus`, `ParseError`
+- `AckSent`, `AckPayload` (truncado), `AckAtUtc` (recomendado)
+- `LatencyParseMs`, `LatencyPersistMs` (opcional)
 
 ### 11.4 `Positions`
 - `PositionId`
@@ -449,7 +455,7 @@ Regla operativa:
 ### 13.2 API
 - JWT + roles
 - Rate limit en gateway
-- CORS estricto
+- CORS estricto (si se expone a un frontend futuro)
 
 ### 13.3 Secrets
 - Secret Manager / variables seguras
@@ -473,6 +479,217 @@ Campos mínimos: `imei`, `protocol`, `port`, `remoteIp`, `sessionId`, `packetId`
 ### 14.3 Health
 Worker: puertos ok, backlog ok, db ok (opcional)  
 API: liveness, readiness, db/redis ok.
+
+---
+
+## 14.5 Backend Toolbox (Ops) — Operación y diagnóstico sin UI
+
+> Objetivo: que el backend sea **depurable y operable** desde el día 1, sin depender de un frontend.  
+> Esto evita “adivinar” por qué un GPS se reconecta, por qué falla el parseo o por qué hay backlog.
+
+### 14.5.1 Principio de oro
+- **Siempre** se guarda evidencia (`RawPackets`), incluso si el parse falla.
+- Cada frame debe tener correlación:
+  - `SessionId` (por conexión)
+  - `PacketId` (por frame)
+  - `Imei` (cuando exista)
+  - `RemoteIp`, `Port`, `Protocol`, `MessageType`
+
+### 14.5.2 Datos mínimos a persistir (para soportar el Toolbox)
+
+#### A) RawPackets (Evidencia / auditoría)
+Guardar por cada frame completo:
+- `PacketId` (GUID)
+- `SessionId` (GUID)
+- `DeviceId` (nullable hasta autorizar)
+- `Imei` (nullable si aún no se extrajo)
+- `Protocol` (string)
+- `Port` (int), `RemoteIp` (string)
+- `ReceivedAtUtc` (datetime)
+- `PayloadText` o `PayloadBytes` (según estrategia)
+- `PayloadHash` (opcional, SHA-256)
+- `ParseStatus` (Ok / Failed / Partial / Rejected)
+- `ParseError` (string corto, sin stacktrace)
+- `AckSent` (bool), `AckPayload` (string/bytes truncado), `AckAtUtc` (datetime nullable)
+- `LatencyParseMs` (opcional), `LatencyPersistMs` (opcional)
+
+> Nota: evitar loguear el payload completo en logs; el payload vive en DB/Storage, y el log referencia `PacketId`.
+
+#### B) DeviceSessions (Estado de conexión)
+- `SessionId`, `DeviceId` (nullable), `RemoteIp`, `Port`
+- `ConnectedAtUtc`, `DisconnectedAtUtc` (nullable), `CloseReason`
+- `LastSeenAtUtc`, `LastHeartbeatAtUtc` (nullable)
+- contadores: `FramesIn`, `FramesInvalid`
+
+#### C) Normalizado (Positions/Events)
+- `PacketId`, `SessionId`, `DeviceId` (correlación)
+- `GpsTimeUtc`, `ReceivedAtUtc`
+- `Lat`, `Lon`, `SpeedKmh`, `HeadingDeg`, `StatusHex`, `MessageType`
+- `ExtraJson` (json/jsonb) para campos específicos no estándar
+
+### 14.5.3 Ops API (Toolbox sin UI)
+
+> Ruta sugerida: `/api/ops/*` (protegida con JWT rol Admin).
+
+#### A) Salud y carga de ingestión
+1) **Estado por puerto**
+- `GET /api/ops/ingestion/ports`
+  - conexiones activas por puerto
+  - frames/s (aprox)
+  - backlog del channel (si aplica)
+  - parse_ok / parse_fail ratio (últimos N min)
+
+2) **Sesiones activas**
+- `GET /api/ops/sessions/active?port=5000`
+  - `SessionId`, `RemoteIp`, `Port`, `Imei/DeviceId` (si existe)
+  - `LastSeenAtUtc`, `FramesIn`, `FramesInvalid`
+
+#### B) Evidencia (raw) y depuración de parseo
+3) **Últimos raw packets por IMEI**
+- `GET /api/ops/raw/latest?imei=...&limit=50`
+  - `ReceivedAtUtc`, `ParseStatus`, `ParseError` (si existe)
+  - `AckSent`, `AckPayload` (truncado), `AckAtUtc`
+  - tamaño del payload (bytes)
+
+4) **Raw packet por PacketId**
+- `GET /api/ops/raw/{packetId}`
+  - payload completo (con límites: truncar/paginar si excede)
+  - parse error y metadata
+  - ack info completa
+
+5) **Top errores recientes**
+- `GET /api/ops/errors/top?from=...&to=...&groupBy=protocol|port|errorCode`
+  - conteos por agrupación
+  - ejemplo de PacketId por error para investigar rápido
+
+#### C) Reconexión / ACK troubleshooting
+6) **Tasa de reconexión por dispositivo o IP**
+- `GET /api/ops/reconnects?from=...&to=...&groupBy=imei|ip`
+  - #sessions en el rango
+  - duración promedio
+  - últimos close reasons
+  - indicador heurístico (opcional): “ACK missing / parse_fail alto / idle timeout”
+
+7) **Historial de ACK por sesión**
+- `GET /api/ops/sessions/{sessionId}/acks?limit=200`
+  - `PacketId`, `AckPayload`, `AckAtUtc`, `MessageType`, `ParseStatus`
+
+### 14.5.4 Métricas mínimas (aunque sea en logs al inicio)
+Métricas recomendadas (OTel/Prometheus cuando esté listo):
+- `tcp_connections_active{port}`
+- `tcp_frames_in_total{port,protocol}`
+- `tcp_frames_invalid_total{port,protocol}`
+- `tcp_parse_ok_total{port,protocol}`
+- `tcp_parse_fail_total{port,protocol}`
+- `tcp_ack_sent_total{protocol,ackType}`
+- `pipeline_backlog{port}`
+- `pipeline_dropped_total{port,reason}` (si hay drop)
+- `db_persist_latency_ms` (histograma p50/p95/p99)
+
+### 14.5.5 Runbook (operación en 60 segundos)
+
+#### Síntoma: “Reconexión constante”
+1) `GET /api/ops/raw/latest?imei=...`
+   - ¿`AckSent=false`? → ACK no se está enviando.
+   - ¿`AckPayload` no coincide? → ACK incorrecto.
+   - ¿`AckAtUtc` tarda mucho? → ACK amarrado a DB o backlog alto.
+2) `GET /api/ops/errors/top?...`
+   - Si parse_fail alto → framing/delimitadores/MaxFrameBytes/encoding.
+3) `GET /api/ops/sessions/active`
+   - Si muchas sesiones cortas → timeouts, inválidos, rate limit o ACK.
+
+#### Síntoma: “Backlog sube”
+1) `GET /api/ops/ingestion/ports`
+   - backlog alto sostenido → DB lenta o workers insuficientes.
+2) Revisar:
+   - p95 persist latency, índices DB, tamaño payload raw.
+3) Si aplica:
+   - activar política de backpressure (Wait/DropOldest/Disconnect) explícita.
+
+#### Síntoma: “Parse_fail alto”
+1) Revisar delimitador/framing:
+   - concatenados e incompletos
+   - MaxFrameBytes
+2) Revisar encoding:
+   - ASCII/UTF-8 esperado por protocolo
+3) Comparar un `PacketId` concreto:
+   - `GET /api/ops/raw/{packetId}`
+
+### 14.5.6 Seguridad de Ops
+- `/api/ops/*` solo para rol Admin.
+- No exponer payload completo sin límites (truncar, paginar o proteger).
+- Evitar payloads completos en logs (usar `PacketId`, hash, tamaños).
+- Rate limit en Ops endpoints si se expone públicamente.
+
+---
+
+## 14.6 Ops API como Web API separada (decisión definitiva)
+
+> Decisión: el **Ops Toolbox** se implementa en un **proyecto Web API separado** (`IMPITrack.Api`).  
+> El Worker TCP (`IMPITrack.Worker`) **no expone HTTP**. Su responsabilidad es: TCP → framing → parse → persistencia → ACK.
+
+### 14.6.1 Responsabilidades por servicio
+
+#### Worker TCP (IMPITrack.Worker)
+- Escucha puertos TCP, gestiona sesiones, framing robusto.
+- Parseo por protocolo (ACL).
+- Envía ACK correcto y rápido.
+- Persiste: `RawPackets` (siempre), `DeviceSessions`, `Positions`, `DeviceEvents`.
+- Escribe métricas/logs (observabilidad).
+- **No depende** de la Web API para operar.
+
+#### Web API (IMPITrack.Api)
+- Expone endpoints:
+  - negocio: devices/positions/events/sessions/commands (cuando aplique)
+  - **ops/toolbox**: `/api/ops/*` (diagnóstico)
+- Autenticación/autorización (JWT + roles).
+- Puede emitir realtime (SignalR) leyendo DB (poll/outbox/bus).
+- Puede ofrecer exportaciones (CSV/GPX) a futuro.
+
+### 14.6.2 Flujo de datos (sin streaming todavía)
+
+```text
+TCP Worker
+  ├─ guarda RawPackets + Sessions + Positions/Events (DB)
+  └─ (opcional futuro) escribe Outbox
+
+Web API
+  ├─ lee DB (queries optimizadas e índices)
+  ├─ expone /api/ops/* (diagnóstico)
+  └─ (futuro) SignalR: push PositionUpdated/Event
+```
+
+### 14.6.3 Modelo mínimo para Ops (requisito)
+Para soportar `/api/ops/*`, las tablas deben incluir:
+- `RawPackets`: PacketId, SessionId, RemoteIp, Port, Protocol, ParseStatus, ParseError, AckSent, AckPayload(trunc), AckAtUtc, ReceivedAtUtc, Payload...
+- `DeviceSessions`: SessionId, DeviceId, RemoteIp, Port, Connected/Disconnected, LastSeen, counters
+- `Devices`: Imei, Protocol, IsActive
+- `Positions` / `DeviceEvents`: correlación por PacketId/SessionId/DeviceId
+
+### 14.6.4 Seguridad y exposición
+- `/api/ops/*` requiere rol **Admin**.
+- No exponer payload completo sin control:
+  - truncar en listados
+  - permitir payload completo solo en `GET /api/ops/raw/{packetId}`
+  - limitar tamaño de respuesta / paginar
+- No loguear payload completo (logs → PacketId/hash + metadata).
+
+### 14.6.5 Contratos internos recomendados (para claridad de implementación)
+- `RawPacket`: `PacketId`, `SessionId`, `RemoteIp`, `Port`, `ReceivedAtUtc`, `Protocol`, `Payload`
+- `ParseResult`: `IsSuccess`, `MessageType`, `Imei?`, `TrackingMessage?`, `ParseError?`, `AckResponse?`
+- `AckResponse`: `ShouldSend`, `AckType`, `Payload` (texto/bytes)
+
+### 14.6.6 Recomendación de implementación (orden)
+1) Worker persiste `RawPackets` y `DeviceSessions` con correlación.
+2) API implementa `/api/ops/raw/latest`, `/api/ops/raw/{packetId}`, `/api/ops/errors/top`.
+3) API implementa `/api/ops/ingestion/ports` y `/api/ops/sessions/active`
+   - En MVP, “ports” puede venir de DB (últimos N min) o de métricas si ya existen.
+4) Luego se agregan positions/events y dashboards de estado.
+
+### 14.6.7 Realtime (futuro, sin romper esta decisión)
+- MVP: API puede hacer polling por `Positions` recientes y emitir `PositionUpdated`.
+- Escalado: patrón Outbox (Worker escribe evento) + API consume y emite SignalR.
+- Enterprise: Pub/Sub/Streams/Kafka como bus.
 
 ---
 
@@ -501,10 +718,10 @@ API: liveness, readiness, db/redis ok.
 **Fase 1 (MVP Core)**
 - Worker multi-puerto + framing robusto
 - Parsers iniciales + persistencia completa
-- API lectura + frontend mapa básico
+- API lectura + Ops Toolbox mínimo
 
 **Fase 2**
-- API admin + SignalR realtime + Redis backplane/cache
+- API admin + (futuro) SignalR + Redis backplane/cache
 
 **Fase 3**
 - Commands bidireccionales + estados + retries + auditoría
@@ -527,6 +744,7 @@ API: liveness, readiness, db/redis ok.
 - [ ] retención/archivado definido
 - [ ] métricas + alertas
 - [ ] runbook de incidentes
+- [ ] XML docs en APIs públicas (compilación con XML opcional)
 
 ---
 
