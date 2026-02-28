@@ -1,0 +1,4 @@
+interface:
+  display_name: "Backend Playbook"
+  short_description: "Maintain AI playbook for .NET 10 TCP worker"
+  default_prompt: "Use $playbook-backend to create or update AI_PLAYBOOK.md for the .NET 10 Worker TCP backend."
