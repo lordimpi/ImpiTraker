@@ -1,3 +1,4 @@
+using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
 using Microsoft.AspNetCore.Authorization;
@@ -13,15 +14,15 @@ namespace ImpiTrack.Api.Controllers;
 [Authorize(Policy = "Admin")]
 public sealed class OpsController : ControllerBase
 {
-    private readonly IOpsDataStore _opsDataStore;
+    private readonly IOpsRepository _opsRepository;
 
     /// <summary>
     /// Crea un controlador de diagnostico operativo.
     /// </summary>
-    /// <param name="opsDataStore">Almacen de datos operativos.</param>
-    public OpsController(IOpsDataStore opsDataStore)
+    /// <param name="opsRepository">Repositorio de consultas operativas.</param>
+    public OpsController(IOpsRepository opsRepository)
     {
-        _opsDataStore = opsDataStore;
+        _opsRepository = opsRepository;
     }
 
     /// <summary>
@@ -32,11 +33,16 @@ public sealed class OpsController : ControllerBase
     /// <returns>Lista de paquetes raw recientes.</returns>
     [HttpGet("raw/latest")]
     [ProducesResponseType(typeof(IReadOnlyList<RawPacketRecord>), StatusCodes.Status200OK)]
-    public ActionResult<IReadOnlyList<RawPacketRecord>> GetLatestRaw(
+    public async Task<ActionResult<IReadOnlyList<RawPacketRecord>>> GetLatestRaw(
         [FromQuery] string? imei,
         [FromQuery] int limit = 50)
     {
-        return Ok(_opsDataStore.GetLatestRawPackets(imei, limit));
+        IReadOnlyList<RawPacketRecord> records = await _opsRepository.GetLatestRawPacketsAsync(
+            imei,
+            limit,
+            HttpContext.RequestAborted);
+
+        return Ok(records);
     }
 
     /// <summary>
@@ -47,10 +53,13 @@ public sealed class OpsController : ControllerBase
     [HttpGet("raw/{packetId:guid}")]
     [ProducesResponseType(typeof(RawPacketRecord), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public ActionResult<RawPacketRecord> GetRawByPacketId([FromRoute] Guid packetId)
+    public async Task<ActionResult<RawPacketRecord>> GetRawByPacketId([FromRoute] Guid packetId)
     {
-        bool found = _opsDataStore.TryGetRawPacket(new PacketId(packetId), out RawPacketRecord? record);
-        if (!found || record is null)
+        RawPacketRecord? record = await _opsRepository.GetRawPacketByIdAsync(
+            new PacketId(packetId),
+            HttpContext.RequestAborted);
+
+        if (record is null)
         {
             return NotFound();
         }
@@ -68,7 +77,7 @@ public sealed class OpsController : ControllerBase
     /// <returns>Agregados de errores.</returns>
     [HttpGet("errors/top")]
     [ProducesResponseType(typeof(IReadOnlyList<ErrorAggregate>), StatusCodes.Status200OK)]
-    public ActionResult<IReadOnlyList<ErrorAggregate>> GetTopErrors(
+    public async Task<ActionResult<IReadOnlyList<ErrorAggregate>>> GetTopErrors(
         [FromQuery] DateTimeOffset? from,
         [FromQuery] DateTimeOffset? to,
         [FromQuery] string groupBy = "errorCode",
@@ -76,7 +85,14 @@ public sealed class OpsController : ControllerBase
     {
         DateTimeOffset toUtc = to ?? DateTimeOffset.UtcNow;
         DateTimeOffset fromUtc = from ?? toUtc.AddHours(-1);
-        return Ok(_opsDataStore.GetTopErrors(fromUtc, toUtc, groupBy, limit));
+        IReadOnlyList<ErrorAggregate> response = await _opsRepository.GetTopErrorsAsync(
+            fromUtc,
+            toUtc,
+            groupBy,
+            limit,
+            HttpContext.RequestAborted);
+
+        return Ok(response);
     }
 
     /// <summary>
@@ -86,9 +102,13 @@ public sealed class OpsController : ControllerBase
     /// <returns>Sesiones activas.</returns>
     [HttpGet("sessions/active")]
     [ProducesResponseType(typeof(IReadOnlyList<SessionRecord>), StatusCodes.Status200OK)]
-    public ActionResult<IReadOnlyList<SessionRecord>> GetActiveSessions([FromQuery] int? port)
+    public async Task<ActionResult<IReadOnlyList<SessionRecord>>> GetActiveSessions([FromQuery] int? port)
     {
-        return Ok(_opsDataStore.GetActiveSessions(port));
+        IReadOnlyList<SessionRecord> sessions = await _opsRepository.GetActiveSessionsAsync(
+            port,
+            HttpContext.RequestAborted);
+
+        return Ok(sessions);
     }
 
     /// <summary>
@@ -97,8 +117,9 @@ public sealed class OpsController : ControllerBase
     /// <returns>Snapshots operativos por puerto.</returns>
     [HttpGet("ingestion/ports")]
     [ProducesResponseType(typeof(IReadOnlyList<PortIngestionSnapshot>), StatusCodes.Status200OK)]
-    public ActionResult<IReadOnlyList<PortIngestionSnapshot>> GetIngestionPorts()
+    public async Task<ActionResult<IReadOnlyList<PortIngestionSnapshot>>> GetIngestionPorts()
     {
-        return Ok(_opsDataStore.GetPortSnapshots());
+        IReadOnlyList<PortIngestionSnapshot> snapshots = await _opsRepository.GetPortSnapshotsAsync(HttpContext.RequestAborted);
+        return Ok(snapshots);
     }
 }

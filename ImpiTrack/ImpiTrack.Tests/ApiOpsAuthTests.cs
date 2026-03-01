@@ -3,9 +3,13 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
+using ImpiTrack.DataAccess.Abstractions;
+using ImpiTrack.DataAccess.InMemory;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
@@ -57,9 +61,27 @@ public sealed class ApiOpsAuthTests
     {
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
+            builder.UseEnvironment("Testing");
+
+            builder.ConfigureAppConfiguration((context, configBuilder) =>
+            {
+                var data = new Dictionary<string, string?>
+                {
+                    ["IdentityStorage:Provider"] = "InMemory",
+                    ["IdentityStorage:ConnectionString"] = string.Empty,
+                    ["IdentityBootstrap:SeedAdminOnStart"] = "false",
+                    ["Database:Provider"] = "InMemory",
+                    ["Database:ConnectionString"] = string.Empty,
+                    ["Database:EnableAutoMigrate"] = "false"
+                };
+
+                configBuilder.AddInMemoryCollection(data);
+            });
+
             builder.ConfigureServices(services =>
             {
-                services.RemoveAll<IOpsDataStore>();
+                services.RemoveAll<IOpsRepository>();
+                services.RemoveAll<IIngestionRepository>();
                 var store = new InMemoryOpsDataStore();
                 store.AddRawPacket(
                     new RawPacketRecord(
@@ -79,7 +101,10 @@ public sealed class ApiOpsAuthTests
                         DateTimeOffset.UtcNow,
                         5),
                     backlog: 0);
-                services.AddSingleton<IOpsDataStore>(store);
+
+                var repository = new InMemoryDataRepository(store);
+                services.AddSingleton<IOpsRepository>(repository);
+                services.AddSingleton<IIngestionRepository>(repository);
             });
         });
     }
