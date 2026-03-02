@@ -1,6 +1,8 @@
+using ImpiTrack.Api.Http;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
+using ImpiTrack.Shared.Api;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -32,8 +34,8 @@ public sealed class OpsController : ControllerBase
     /// <param name="limit">Limite maximo de resultados.</param>
     /// <returns>Lista de paquetes raw recientes.</returns>
     [HttpGet("raw/latest")]
-    [ProducesResponseType(typeof(IReadOnlyList<RawPacketRecord>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<RawPacketRecord>>> GetLatestRaw(
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<RawPacketRecord>>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<RawPacketRecord>>>> GetLatestRaw(
         [FromQuery] string? imei,
         [FromQuery] int limit = 50)
     {
@@ -42,7 +44,7 @@ public sealed class OpsController : ControllerBase
             limit,
             HttpContext.RequestAborted);
 
-        return Ok(records);
+        return this.OkEnvelope(records);
     }
 
     /// <summary>
@@ -51,9 +53,9 @@ public sealed class OpsController : ControllerBase
     /// <param name="packetId">Id de paquete a consultar.</param>
     /// <returns>Paquete raw encontrado o 404.</returns>
     [HttpGet("raw/{packetId:guid}")]
-    [ProducesResponseType(typeof(RawPacketRecord), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<RawPacketRecord>> GetRawByPacketId([FromRoute] Guid packetId)
+    [ProducesResponseType(typeof(ApiResponse<RawPacketRecord>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<RawPacketRecord>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<RawPacketRecord>>> GetRawByPacketId([FromRoute] Guid packetId)
     {
         RawPacketRecord? record = await _opsRepository.GetRawPacketByIdAsync(
             new PacketId(packetId),
@@ -61,10 +63,13 @@ public sealed class OpsController : ControllerBase
 
         if (record is null)
         {
-            return NotFound();
+            return this.FailEnvelope<RawPacketRecord>(
+                StatusCodes.Status404NotFound,
+                "resource_not_found",
+                "No existe un paquete para el identificador solicitado.");
         }
 
-        return Ok(record);
+        return this.OkEnvelope(record);
     }
 
     /// <summary>
@@ -76,8 +81,8 @@ public sealed class OpsController : ControllerBase
     /// <param name="limit">Limite de grupos devueltos.</param>
     /// <returns>Agregados de errores.</returns>
     [HttpGet("errors/top")]
-    [ProducesResponseType(typeof(IReadOnlyList<ErrorAggregate>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<ErrorAggregate>>> GetTopErrors(
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ErrorAggregate>>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<ErrorAggregate>>>> GetTopErrors(
         [FromQuery] DateTimeOffset? from,
         [FromQuery] DateTimeOffset? to,
         [FromQuery] string groupBy = "errorCode",
@@ -92,7 +97,7 @@ public sealed class OpsController : ControllerBase
             limit,
             HttpContext.RequestAborted);
 
-        return Ok(response);
+        return this.OkEnvelope(response);
     }
 
     /// <summary>
@@ -101,14 +106,14 @@ public sealed class OpsController : ControllerBase
     /// <param name="port">Puerto opcional de filtrado.</param>
     /// <returns>Sesiones activas.</returns>
     [HttpGet("sessions/active")]
-    [ProducesResponseType(typeof(IReadOnlyList<SessionRecord>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<SessionRecord>>> GetActiveSessions([FromQuery] int? port)
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<SessionRecord>>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<SessionRecord>>>> GetActiveSessions([FromQuery] int? port)
     {
         IReadOnlyList<SessionRecord> sessions = await _opsRepository.GetActiveSessionsAsync(
             port,
             HttpContext.RequestAborted);
 
-        return Ok(sessions);
+        return this.OkEnvelope(sessions);
     }
 
     /// <summary>
@@ -116,10 +121,10 @@ public sealed class OpsController : ControllerBase
     /// </summary>
     /// <returns>Snapshots operativos por puerto.</returns>
     [HttpGet("ingestion/ports")]
-    [ProducesResponseType(typeof(IReadOnlyList<PortIngestionSnapshot>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<PortIngestionSnapshot>>> GetIngestionPorts()
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<PortIngestionSnapshot>>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<PortIngestionSnapshot>>>> GetIngestionPorts()
     {
         IReadOnlyList<PortIngestionSnapshot> snapshots = await _opsRepository.GetPortSnapshotsAsync(HttpContext.RequestAborted);
-        return Ok(snapshots);
+        return this.OkEnvelope(snapshots);
     }
 }

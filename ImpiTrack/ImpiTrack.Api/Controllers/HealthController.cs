@@ -1,3 +1,5 @@
+using ImpiTrack.Api.Http;
+using ImpiTrack.Shared.Api;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,14 +17,12 @@ public sealed class HealthController : ControllerBase
     /// </summary>
     /// <returns>Estado saludable del servicio.</returns>
     [HttpGet("/health")]
-    public IActionResult Health()
+    public ActionResult<ApiResponse<HealthStatusResponse>> Health()
     {
-        return Ok(new
-        {
-            status = "ok",
-            service = "ImpiTrack.Api",
-            utc = DateTimeOffset.UtcNow
-        });
+        return this.OkEnvelope(new HealthStatusResponse(
+            "ok",
+            "ImpiTrack.Api",
+            DateTimeOffset.UtcNow));
     }
 
     /// <summary>
@@ -30,13 +30,22 @@ public sealed class HealthController : ControllerBase
     /// </summary>
     /// <returns>Estado de readiness del servicio.</returns>
     [HttpGet("/ready")]
-    public IActionResult Ready()
+    public ActionResult<ApiResponse<HealthStatusResponse>> Ready()
     {
-        return Ok(new
-        {
-            status = "ready",
-            service = "ImpiTrack.Api",
-            utc = DateTimeOffset.UtcNow
-        });
+        return this.OkEnvelope(new HealthStatusResponse(
+            "ready",
+            "ImpiTrack.Api",
+            DateTimeOffset.UtcNow));
     }
+
+    /// <summary>
+    /// Contrato de estado de salud para endpoints de disponibilidad.
+    /// </summary>
+    /// <param name="Status">Estado funcional del servicio.</param>
+    /// <param name="Service">Nombre del servicio.</param>
+    /// <param name="Utc">Fecha UTC del muestreo.</param>
+    public sealed record HealthStatusResponse(
+        string Status,
+        string Service,
+        DateTimeOffset Utc);
 }

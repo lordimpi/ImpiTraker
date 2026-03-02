@@ -12,8 +12,9 @@ namespace ImpiTrack.DataAccess.Repositories;
 /// <summary>
 /// Repositorio SQL con soporte para SQL Server y PostgreSQL.
 /// </summary>
-public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
+public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository
 {
+    private const string DefaultPlanCode = "BASIC";
     private readonly IDbConnectionFactory _connectionFactory;
     private readonly DatabaseRuntimeContext _context;
 
@@ -40,7 +41,6 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
                 connection,
                 transaction,
                 record.Imei,
-                record.ReceivedAtUtc,
                 cancellationToken);
 
             CommandDefinition insertRaw = new(
@@ -108,7 +108,6 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
                 connection,
                 transaction,
                 session.Imei,
-                session.LastSeenAtUtc,
                 cancellationToken);
 
             CommandDefinition command = new(
@@ -155,8 +154,13 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
                 connection,
                 transaction,
                 envelope.Message.Imei,
-                envelope.Message.ReceivedAtUtc,
                 cancellationToken);
+
+            if (deviceId is null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return;
+            }
 
             if (envelope.Message.MessageType == MessageType.Tracking)
             {
@@ -311,11 +315,320 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
             .ToArray();
     }
 
+    /// <inheritdoc />
+    public async Task EnsureUserProvisioningAsync(
+        Guid userId,
+        string email,
+        string? fullName,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            CommandDefinition upsertProfile = new(
+                GetUpsertUserProfileSql(_context.Provider),
+                new
+                {
+                    UserId = userId,
+                    Email = email,
+                    FullName = fullName,
+                    NowUtc = nowUtc
+                },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            await connection.ExecuteAsync(upsertProfile);
+
+            CommandDefinition ensureSubscription = new(
+                GetEnsureDefaultSubscriptionSql(_context.Provider),
+                new
+                {
+                    UserId = userId,
+                    PlanCode = DefaultPlanCode,
+                    NowUtc = nowUtc,
+                    SubscriptionId = Guid.NewGuid()
+                },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            await connection.ExecuteAsync(ensureSubscription);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<UserAccountSummary?> GetUserSummaryAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetUserSummarySql(_context.Provider),
+            new { UserId = userId },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        UserSummaryRow? row = await connection.QuerySingleOrDefaultAsync<UserSummaryRow>(command);
+        if (row is null)
+        {
+            return null;
+        }
+
+        return new UserAccountSummary(
+            row.UserId,
+            row.Email,
+            row.FullName,
+            row.PlanCode,
+            row.PlanName,
+            row.MaxGps,
+            row.UsedGps);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<UserDeviceBinding>> GetUserDevicesAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetUserDevicesSql(_context.Provider),
+            new { UserId = userId },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<UserDeviceRow> rows = await connection.QueryAsync<UserDeviceRow>(command);
+        return rows
+            .Select(x => new UserDeviceBinding(x.DeviceId, x.Imei, x.BoundAtUtc))
+            .ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<BindDeviceResult> BindDeviceAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        string normalizedImei = imei.Trim();
+        if (normalizedImei.Length == 0)
+        {
+            return new BindDeviceResult(BindDeviceStatus.OwnedByAnotherUser, null);
+        }
+
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            CommandDefinition ownerCommand = new(
+                GetActiveOwnerByImeiSql(_context.Provider),
+                new { Imei = normalizedImei },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            DeviceOwnerRow? owner = await connection.QuerySingleOrDefaultAsync<DeviceOwnerRow>(ownerCommand);
+            if (owner is not null)
+            {
+                if (owner.UserId == userId)
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                    return new BindDeviceResult(BindDeviceStatus.AlreadyBound, owner.DeviceId);
+                }
+
+                await transaction.CommitAsync(cancellationToken);
+                return new BindDeviceResult(BindDeviceStatus.OwnedByAnotherUser, null);
+            }
+
+            CommandDefinition quotaCommand = new(
+                GetUserQuotaSql(_context.Provider),
+                new { UserId = userId },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            UserQuotaRow? quota = await connection.QuerySingleOrDefaultAsync<UserQuotaRow>(quotaCommand);
+            if (quota is null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return new BindDeviceResult(BindDeviceStatus.MissingActivePlan, null);
+            }
+
+            if (quota.UsedGps >= quota.MaxGps)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return new BindDeviceResult(BindDeviceStatus.QuotaExceeded, null);
+            }
+
+            Guid deviceId = await EnsureDeviceAsync(connection, transaction, normalizedImei, nowUtc, cancellationToken);
+
+            CommandDefinition bindCommand = new(
+                GetBindUserDeviceSql(_context.Provider),
+                new
+                {
+                    UserDeviceId = Guid.NewGuid(),
+                    UserId = userId,
+                    DeviceId = deviceId,
+                    Imei = normalizedImei,
+                    BoundAtUtc = nowUtc
+                },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            await connection.ExecuteAsync(bindCommand);
+            await transaction.CommitAsync(cancellationToken);
+            return new BindDeviceResult(BindDeviceStatus.Bound, deviceId);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> UnbindDeviceAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetUnbindUserDeviceSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim(),
+                NowUtc = nowUtc
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int affected = await connection.ExecuteAsync(command);
+        return affected > 0;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken)
+    {
+        int normalizedLimit = Math.Clamp(limit, 1, 500);
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetUsersOverviewSql(_context.Provider),
+            new { Limit = normalizedLimit },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<UserOverviewRow> rows = await connection.QueryAsync<UserOverviewRow>(command);
+        return rows.Select(x => new UserAccountOverview(
+            x.UserId,
+            x.Email,
+            x.FullName,
+            x.PlanCode,
+            x.MaxGps,
+            x.UsedGps)).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> SetUserPlanAsync(
+        Guid userId,
+        string planCode,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            CommandDefinition resolvePlan = new(
+                GetPlanIdByCodeSql(_context.Provider),
+                new { PlanCode = planCode.Trim().ToUpperInvariant() },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            Guid? planId = await connection.ExecuteScalarAsync<Guid?>(resolvePlan);
+            if (planId is null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return false;
+            }
+
+            CommandDefinition deactivate = new(
+                GetDeactivateActiveSubscriptionsSql(_context.Provider),
+                new { UserId = userId, NowUtc = nowUtc },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            await connection.ExecuteAsync(deactivate);
+
+            CommandDefinition insert = new(
+                GetInsertSubscriptionSql(_context.Provider),
+                new
+                {
+                    SubscriptionId = Guid.NewGuid(),
+                    UserId = userId,
+                    PlanId = planId.Value,
+                    StartsAtUtc = nowUtc,
+                    CreatedAtUtc = nowUtc
+                },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            int affected = await connection.ExecuteAsync(insert);
+            await transaction.CommitAsync(cancellationToken);
+            return affected > 0;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    private async Task<Guid> EnsureDeviceAsync(
+        IDbConnection connection,
+        IDbTransaction transaction,
+        string imei,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken)
+    {
+        CommandDefinition command = new(
+            GetEnsureDeviceSql(_context.Provider),
+            new
+            {
+                DeviceId = Guid.NewGuid(),
+                Imei = imei,
+                NowUtc = nowUtc
+            },
+            transaction,
+            _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        Guid? deviceId = await connection.ExecuteScalarAsync<Guid?>(command);
+        if (!deviceId.HasValue)
+        {
+            throw new InvalidOperationException("ensure_device_failed");
+        }
+
+        return deviceId.Value;
+    }
+
     private async Task<Guid?> ResolveDeviceIdAsync(
         IDbConnection connection,
         IDbTransaction transaction,
         string? imei,
-        DateTimeOffset seenAtUtc,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(imei))
@@ -324,18 +637,16 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
         }
 
         CommandDefinition command = new(
-            GetUpsertAndSelectDeviceSql(_context.Provider),
+            GetOwnedDeviceByImeiSql(_context.Provider),
             new
             {
-                DeviceId = Guid.NewGuid(),
-                Imei = imei,
-                SeenAtUtc = seenAtUtc
+                Imei = imei
             },
             transaction,
             _context.CommandTimeoutSeconds,
             cancellationToken: cancellationToken);
 
-        return await connection.ExecuteScalarAsync<Guid>(command);
+        return await connection.ExecuteScalarAsync<Guid?>(command);
     }
 
     private static RawPacketRecord ToRawPacketRecord(RawPacketRow row)
@@ -658,7 +969,289 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
         };
     }
 
-    private static string GetUpsertAndSelectDeviceSql(DatabaseProvider provider)
+    private static string GetOwnedDeviceByImeiSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP 1 ud.device_id
+                FROM user_devices ud
+                WHERE ud.imei = @Imei
+                  AND ud.is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT ud.device_id
+                FROM user_devices ud
+                WHERE ud.imei = @Imei
+                  AND ud.is_active = TRUE
+                LIMIT 1;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUpsertUserProfileSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                IF EXISTS (SELECT 1 FROM user_profiles WHERE user_id = @UserId)
+                BEGIN
+                    UPDATE user_profiles
+                    SET email = @Email,
+                        full_name = COALESCE(@FullName, full_name),
+                        updated_at_utc = @NowUtc
+                    WHERE user_id = @UserId;
+                END
+                ELSE
+                BEGIN
+                    INSERT INTO user_profiles
+                    (
+                        user_id, email, full_name, created_at_utc, updated_at_utc
+                    )
+                    VALUES
+                    (
+                        @UserId, @Email, @FullName, @NowUtc, @NowUtc
+                    );
+                END;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                INSERT INTO user_profiles
+                (
+                    user_id, email, full_name, created_at_utc, updated_at_utc
+                )
+                VALUES
+                (
+                    @UserId, @Email, @FullName, @NowUtc, @NowUtc
+                )
+                ON CONFLICT (user_id)
+                DO UPDATE SET
+                    email = EXCLUDED.email,
+                    full_name = COALESCE(EXCLUDED.full_name, user_profiles.full_name),
+                    updated_at_utc = EXCLUDED.updated_at_utc;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_upsert")
+        };
+    }
+
+    private static string GetEnsureDefaultSubscriptionSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                IF NOT EXISTS
+                (
+                    SELECT 1
+                    FROM user_plan_subscriptions
+                    WHERE user_id = @UserId
+                      AND status = 'Active'
+                      AND ends_at_utc IS NULL
+                )
+                BEGIN
+                    INSERT INTO user_plan_subscriptions
+                    (
+                        subscription_id, user_id, plan_id, status, starts_at_utc, ends_at_utc, created_at_utc
+                    )
+                    SELECT
+                        @SubscriptionId, @UserId, p.plan_id, 'Active', @NowUtc, NULL, @NowUtc
+                    FROM plans p
+                    WHERE p.code = @PlanCode
+                      AND p.is_active = 1;
+                END;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                INSERT INTO user_plan_subscriptions
+                (
+                    subscription_id, user_id, plan_id, status, starts_at_utc, ends_at_utc, created_at_utc
+                )
+                SELECT
+                    @SubscriptionId, @UserId, p.plan_id, 'Active', @NowUtc, NULL, @NowUtc
+                FROM plans p
+                WHERE p.code = @PlanCode
+                  AND p.is_active = TRUE
+                  AND NOT EXISTS
+                  (
+                    SELECT 1
+                    FROM user_plan_subscriptions s
+                    WHERE s.user_id = @UserId
+                      AND s.status = 'Active'
+                      AND s.ends_at_utc IS NULL
+                  );
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_insert")
+        };
+    }
+
+    private static string GetUserSummarySql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    up.user_id AS UserId,
+                    up.email AS Email,
+                    up.full_name AS FullName,
+                    p.code AS PlanCode,
+                    p.name AS PlanName,
+                    p.max_gps AS MaxGps,
+                    CAST(ISNULL(usage_data.used_gps, 0) AS INT) AS UsedGps
+                FROM user_profiles up
+                INNER JOIN user_plan_subscriptions s
+                    ON s.user_id = up.user_id
+                   AND s.status = 'Active'
+                   AND s.ends_at_utc IS NULL
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                OUTER APPLY
+                (
+                    SELECT COUNT_BIG(*) AS used_gps
+                    FROM user_devices ud
+                    WHERE ud.user_id = up.user_id
+                      AND ud.is_active = 1
+                ) usage_data
+                WHERE up.user_id = @UserId;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    up.user_id AS "UserId",
+                    up.email AS "Email",
+                    up.full_name AS "FullName",
+                    p.code AS "PlanCode",
+                    p.name AS "PlanName",
+                    p.max_gps AS "MaxGps",
+                    COALESCE(usage_data.used_gps, 0)::INT AS "UsedGps"
+                FROM user_profiles up
+                INNER JOIN user_plan_subscriptions s
+                    ON s.user_id = up.user_id
+                   AND s.status = 'Active'
+                   AND s.ends_at_utc IS NULL
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                LEFT JOIN LATERAL
+                (
+                    SELECT COUNT(*)::BIGINT AS used_gps
+                    FROM user_devices ud
+                    WHERE ud.user_id = up.user_id
+                      AND ud.is_active = TRUE
+                ) usage_data ON TRUE
+                WHERE up.user_id = @UserId;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUserDevicesSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    device_id AS DeviceId,
+                    imei AS Imei,
+                    bound_at_utc AS BoundAtUtc
+                FROM user_devices
+                WHERE user_id = @UserId
+                  AND is_active = 1
+                ORDER BY bound_at_utc DESC, imei ASC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    device_id AS "DeviceId",
+                    imei AS "Imei",
+                    bound_at_utc AS "BoundAtUtc"
+                FROM user_devices
+                WHERE user_id = @UserId
+                  AND is_active = TRUE
+                ORDER BY bound_at_utc DESC, imei ASC;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetActiveOwnerByImeiSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP 1
+                    user_id AS UserId,
+                    device_id AS DeviceId
+                FROM user_devices
+                WHERE imei = @Imei
+                  AND is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    user_id AS "UserId",
+                    device_id AS "DeviceId"
+                FROM user_devices
+                WHERE imei = @Imei
+                  AND is_active = TRUE
+                LIMIT 1;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUserQuotaSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    p.max_gps AS MaxGps,
+                    CAST(ISNULL(usage_data.used_gps, 0) AS INT) AS UsedGps
+                FROM user_plan_subscriptions s
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                OUTER APPLY
+                (
+                    SELECT COUNT_BIG(*) AS used_gps
+                    FROM user_devices ud
+                    WHERE ud.user_id = s.user_id
+                      AND ud.is_active = 1
+                ) usage_data
+                WHERE s.user_id = @UserId
+                  AND s.status = 'Active'
+                  AND s.ends_at_utc IS NULL;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    p.max_gps AS "MaxGps",
+                    COALESCE(usage_data.used_gps, 0)::INT AS "UsedGps"
+                FROM user_plan_subscriptions s
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                LEFT JOIN LATERAL
+                (
+                    SELECT COUNT(*)::BIGINT AS used_gps
+                    FROM user_devices ud
+                    WHERE ud.user_id = s.user_id
+                      AND ud.is_active = TRUE
+                ) usage_data ON TRUE
+                WHERE s.user_id = @UserId
+                  AND s.status = 'Active'
+                  AND s.ends_at_utc IS NULL;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetEnsureDeviceSql(DatabaseProvider provider)
     {
         return provider switch
         {
@@ -667,13 +1260,13 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
                 IF EXISTS (SELECT 1 FROM devices WHERE imei = @Imei)
                 BEGIN
                     UPDATE devices
-                    SET last_seen_at_utc = @SeenAtUtc
+                    SET last_seen_at_utc = @NowUtc
                     WHERE imei = @Imei;
                 END
                 ELSE
                 BEGIN
                     INSERT INTO devices(device_id, imei, created_at_utc, last_seen_at_utc)
-                    VALUES (@DeviceId, @Imei, @SeenAtUtc, @SeenAtUtc);
+                    VALUES (@DeviceId, @Imei, @NowUtc, @NowUtc);
                 END;
 
                 SELECT device_id FROM devices WHERE imei = @Imei;
@@ -681,13 +1274,207 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
             DatabaseProvider.Postgres =>
                 """
                 INSERT INTO devices(device_id, imei, created_at_utc, last_seen_at_utc)
-                VALUES (@DeviceId, @Imei, @SeenAtUtc, @SeenAtUtc)
+                VALUES (@DeviceId, @Imei, @NowUtc, @NowUtc)
                 ON CONFLICT (imei)
                 DO UPDATE SET last_seen_at_utc = EXCLUDED.last_seen_at_utc;
 
                 SELECT device_id FROM devices WHERE imei = @Imei;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_upsert")
+        };
+    }
+
+    private static string GetBindUserDeviceSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                INSERT INTO user_devices
+                (
+                    user_device_id, user_id, device_id, imei, bound_at_utc, unbound_at_utc, is_active
+                )
+                VALUES
+                (
+                    @UserDeviceId, @UserId, @DeviceId, @Imei, @BoundAtUtc, NULL, 1
+                );
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                INSERT INTO user_devices
+                (
+                    user_device_id, user_id, device_id, imei, bound_at_utc, unbound_at_utc, is_active
+                )
+                VALUES
+                (
+                    @UserDeviceId, @UserId, @DeviceId, @Imei, @BoundAtUtc, NULL, TRUE
+                );
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_insert")
+        };
+    }
+
+    private static string GetUnbindUserDeviceSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                UPDATE user_devices
+                SET is_active = 0,
+                    unbound_at_utc = @NowUtc
+                WHERE user_id = @UserId
+                  AND imei = @Imei
+                  AND is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                UPDATE user_devices
+                SET is_active = FALSE,
+                    unbound_at_utc = @NowUtc
+                WHERE user_id = @UserId
+                  AND imei = @Imei
+                  AND is_active = TRUE;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_update")
+        };
+    }
+
+    private static string GetUsersOverviewSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP (@Limit)
+                    up.user_id AS UserId,
+                    up.email AS Email,
+                    up.full_name AS FullName,
+                    p.code AS PlanCode,
+                    p.max_gps AS MaxGps,
+                    CAST(ISNULL(usage_data.used_gps, 0) AS INT) AS UsedGps
+                FROM user_profiles up
+                INNER JOIN user_plan_subscriptions s
+                    ON s.user_id = up.user_id
+                   AND s.status = 'Active'
+                   AND s.ends_at_utc IS NULL
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                OUTER APPLY
+                (
+                    SELECT COUNT_BIG(*) AS used_gps
+                    FROM user_devices ud
+                    WHERE ud.user_id = up.user_id
+                      AND ud.is_active = 1
+                ) usage_data
+                ORDER BY up.created_at_utc DESC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    up.user_id AS "UserId",
+                    up.email AS "Email",
+                    up.full_name AS "FullName",
+                    p.code AS "PlanCode",
+                    p.max_gps AS "MaxGps",
+                    COALESCE(usage_data.used_gps, 0)::INT AS "UsedGps"
+                FROM user_profiles up
+                INNER JOIN user_plan_subscriptions s
+                    ON s.user_id = up.user_id
+                   AND s.status = 'Active'
+                   AND s.ends_at_utc IS NULL
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                LEFT JOIN LATERAL
+                (
+                    SELECT COUNT(*)::BIGINT AS used_gps
+                    FROM user_devices ud
+                    WHERE ud.user_id = up.user_id
+                      AND ud.is_active = TRUE
+                ) usage_data ON TRUE
+                ORDER BY up.created_at_utc DESC
+                LIMIT @Limit;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetPlanIdByCodeSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP 1 plan_id
+                FROM plans
+                WHERE code = @PlanCode
+                  AND is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT plan_id
+                FROM plans
+                WHERE code = @PlanCode
+                  AND is_active = TRUE
+                LIMIT 1;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetDeactivateActiveSubscriptionsSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                UPDATE user_plan_subscriptions
+                SET status = 'Ended',
+                    ends_at_utc = @NowUtc
+                WHERE user_id = @UserId
+                  AND status = 'Active'
+                  AND ends_at_utc IS NULL;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                UPDATE user_plan_subscriptions
+                SET status = 'Ended',
+                    ends_at_utc = @NowUtc
+                WHERE user_id = @UserId
+                  AND status = 'Active'
+                  AND ends_at_utc IS NULL;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_update")
+        };
+    }
+
+    private static string GetInsertSubscriptionSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                INSERT INTO user_plan_subscriptions
+                (
+                    subscription_id, user_id, plan_id, status, starts_at_utc, ends_at_utc, created_at_utc
+                )
+                VALUES
+                (
+                    @SubscriptionId, @UserId, @PlanId, 'Active', @StartsAtUtc, NULL, @CreatedAtUtc
+                );
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                INSERT INTO user_plan_subscriptions
+                (
+                    subscription_id, user_id, plan_id, status, starts_at_utc, ends_at_utc, created_at_utc
+                )
+                VALUES
+                (
+                    @SubscriptionId, @UserId, @PlanId, 'Active', @StartsAtUtc, NULL, @CreatedAtUtc
+                );
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_insert")
         };
     }
 
@@ -941,5 +1728,60 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository
         public long AckSent { get; set; }
 
         public long Backlog { get; set; }
+    }
+
+    private sealed class UserSummaryRow
+    {
+        public Guid UserId { get; set; }
+
+        public string Email { get; set; } = string.Empty;
+
+        public string? FullName { get; set; }
+
+        public string PlanCode { get; set; } = string.Empty;
+
+        public string PlanName { get; set; } = string.Empty;
+
+        public int MaxGps { get; set; }
+
+        public int UsedGps { get; set; }
+    }
+
+    private sealed class UserDeviceRow
+    {
+        public Guid DeviceId { get; set; }
+
+        public string Imei { get; set; } = string.Empty;
+
+        public DateTimeOffset BoundAtUtc { get; set; }
+    }
+
+    private sealed class DeviceOwnerRow
+    {
+        public Guid UserId { get; set; }
+
+        public Guid DeviceId { get; set; }
+    }
+
+    private sealed class UserQuotaRow
+    {
+        public int MaxGps { get; set; }
+
+        public int UsedGps { get; set; }
+    }
+
+    private sealed class UserOverviewRow
+    {
+        public Guid UserId { get; set; }
+
+        public string Email { get; set; } = string.Empty;
+
+        public string? FullName { get; set; }
+
+        public string PlanCode { get; set; } = string.Empty;
+
+        public int MaxGps { get; set; }
+
+        public int UsedGps { get; set; }
     }
 }

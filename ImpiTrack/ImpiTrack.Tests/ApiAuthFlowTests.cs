@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using ImpiTrack.Ops;
 using Microsoft.AspNetCore.Hosting;
@@ -24,10 +24,12 @@ public sealed class ApiAuthFlowTests
         });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        AuthTokenPairResponse? payload = await response.Content.ReadFromJsonAsync<AuthTokenPairResponse>();
+        ApiEnvelope<AuthTokenPairResponse>? payload = await response.Content.ReadFromJsonAsync<ApiEnvelope<AuthTokenPairResponse>>();
         Assert.NotNull(payload);
-        Assert.False(string.IsNullOrWhiteSpace(payload!.AccessToken));
-        Assert.False(string.IsNullOrWhiteSpace(payload.RefreshToken));
+        Assert.True(payload!.Success);
+        Assert.NotNull(payload.Data);
+        Assert.False(string.IsNullOrWhiteSpace(payload.Data!.AccessToken));
+        Assert.False(string.IsNullOrWhiteSpace(payload.Data.RefreshToken));
     }
 
     [Fact]
@@ -42,18 +44,21 @@ public sealed class ApiAuthFlowTests
             password = "ChangeMe!123"
         });
 
-        AuthTokenPairResponse? loginPayload = await loginResponse.Content.ReadFromJsonAsync<AuthTokenPairResponse>();
+        ApiEnvelope<AuthTokenPairResponse>? loginPayload = await loginResponse.Content.ReadFromJsonAsync<ApiEnvelope<AuthTokenPairResponse>>();
         Assert.NotNull(loginPayload);
+        Assert.NotNull(loginPayload!.Data);
 
         HttpResponseMessage refreshResponse = await client.PostAsJsonAsync("/api/auth/refresh", new
         {
-            refreshToken = loginPayload!.RefreshToken
+            refreshToken = loginPayload.Data!.RefreshToken
         });
 
         Assert.Equal(HttpStatusCode.OK, refreshResponse.StatusCode);
-        AuthTokenPairResponse? refreshPayload = await refreshResponse.Content.ReadFromJsonAsync<AuthTokenPairResponse>();
+        ApiEnvelope<AuthTokenPairResponse>? refreshPayload = await refreshResponse.Content.ReadFromJsonAsync<ApiEnvelope<AuthTokenPairResponse>>();
         Assert.NotNull(refreshPayload);
-        Assert.NotEqual(loginPayload.RefreshToken, refreshPayload!.RefreshToken);
+        Assert.True(refreshPayload!.Success);
+        Assert.NotNull(refreshPayload.Data);
+        Assert.NotEqual(loginPayload.Data.RefreshToken, refreshPayload.Data!.RefreshToken);
     }
 
     [Fact]
@@ -68,12 +73,13 @@ public sealed class ApiAuthFlowTests
             password = "ChangeMe!123"
         });
 
-        AuthTokenPairResponse? loginPayload = await loginResponse.Content.ReadFromJsonAsync<AuthTokenPairResponse>();
+        ApiEnvelope<AuthTokenPairResponse>? loginPayload = await loginResponse.Content.ReadFromJsonAsync<ApiEnvelope<AuthTokenPairResponse>>();
         Assert.NotNull(loginPayload);
+        Assert.NotNull(loginPayload!.Data);
 
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer",
-            loginPayload!.AccessToken);
+            loginPayload.Data!.AccessToken);
 
         HttpResponseMessage response = await client.GetAsync("/api/ops/ingestion/ports");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -110,6 +116,24 @@ public sealed class ApiAuthFlowTests
                 services.AddSingleton<IOpsDataStore, InMemoryOpsDataStore>();
             });
         });
+    }
+
+    private sealed class ApiEnvelope<T>
+    {
+        public bool Success { get; set; }
+
+        public T? Data { get; set; }
+
+        public ApiErrorResponse? Error { get; set; }
+
+        public string TraceId { get; set; } = string.Empty;
+    }
+
+    private sealed class ApiErrorResponse
+    {
+        public string Code { get; set; } = string.Empty;
+
+        public string Message { get; set; } = string.Empty;
     }
 
     private sealed class AuthTokenPairResponse

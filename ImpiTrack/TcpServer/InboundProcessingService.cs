@@ -1,6 +1,7 @@
+﻿using ImpiTrack.DataAccess.Abstractions;
+using ImpiTrack.DataAccess.IOptionPattern;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.Queue;
-using Microsoft.Extensions.Options;
 
 namespace TcpServer;
 
@@ -11,6 +12,7 @@ public sealed class InboundProcessingService : BackgroundService
 {
     private readonly ILogger<InboundProcessingService> _logger;
     private readonly IInboundQueue _inboundQueue;
+    private readonly IIngestionRepository _ingestionRepository;
     private readonly int _workerCount;
 
     /// <summary>
@@ -18,15 +20,18 @@ public sealed class InboundProcessingService : BackgroundService
     /// </summary>
     /// <param name="logger">Instancia de logger.</param>
     /// <param name="inboundQueue">Abstraccion de cola entrante.</param>
+    /// <param name="ingestionRepository">Repositorio de persistencia downstream.</param>
     /// <param name="options">Opciones del servidor.</param>
     public InboundProcessingService(
         ILogger<InboundProcessingService> logger,
         IInboundQueue inboundQueue,
-        IOptions<TcpServerOptions> options)
+        IIngestionRepository ingestionRepository,
+        IGenericOptionsService<TcpServerOptions> optionsService)
     {
         _logger = logger;
         _inboundQueue = inboundQueue;
-        _workerCount = Math.Max(1, options.Value.Pipeline.ConsumerWorkers);
+        _ingestionRepository = ingestionRepository;
+        _workerCount = Math.Max(1, optionsService.GetOptions().Pipeline.ConsumerWorkers);
     }
 
     /// <summary>
@@ -52,15 +57,20 @@ public sealed class InboundProcessingService : BackgroundService
             try
             {
                 InboundEnvelope envelope = await _inboundQueue.DequeueAsync(cancellationToken);
+                DateTimeOffset startedAtUtc = DateTimeOffset.UtcNow;
+                await _ingestionRepository.PersistEnvelopeAsync(envelope, cancellationToken);
+                double persistLatencyMs = (DateTimeOffset.UtcNow - startedAtUtc).TotalMilliseconds;
+
                 _logger.LogInformation(
-                    "queue_consume worker={workerNumber} sessionId={sessionId} packetId={packetId} protocol={protocol} messageType={messageType} imei={imei} backlog={backlog}",
+                    "queue_consume worker={workerNumber} sessionId={sessionId} packetId={packetId} protocol={protocol} messageType={messageType} imei={imei} backlog={backlog} persistLatencyMs={persistLatencyMs}",
                     workerNumber,
                     envelope.SessionId,
                     envelope.PacketId,
                     envelope.Message.Protocol,
                     envelope.Message.MessageType,
                     envelope.Message.Imei ?? "n/a",
-                    _inboundQueue.Backlog);
+                    _inboundQueue.Backlog,
+                    persistLatencyMs);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -73,3 +83,5 @@ public sealed class InboundProcessingService : BackgroundService
         }
     }
 }
+
+

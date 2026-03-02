@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>imptrack-api-local</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,6 +23,9 @@
   <ItemGroup>
     <ProjectReference Include="..\ImpiTrack.Ops\ImpiTrack.Ops.csproj" />
     <ProjectReference Include="..\ImpiTrack.DataAccess\ImpiTrack.DataAccess.csproj" />
+    <ProjectReference Include="..\ImpiTrack.Shared\ImpiTrack.Shared.csproj" />
+    <ProjectReference Include="..\ImpiTrack.Application\ImpiTrack.Application.csproj" />
+    <ProjectReference Include="..\ImpiTrack.Auth.Infrastructure\ImpiTrack.Auth.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

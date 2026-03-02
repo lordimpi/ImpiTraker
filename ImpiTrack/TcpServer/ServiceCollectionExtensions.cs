@@ -1,15 +1,15 @@
+﻿using ImpiTrack.DataAccess.Extensions;
+using ImpiTrack.DataAccess.IOptionPattern;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Protocols.Cantrack;
 using ImpiTrack.Protocols.Coban;
 using ImpiTrack.Observability;
-using ImpiTrack.Ops;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.Correlation;
 using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
 using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
-using Microsoft.Extensions.Options;
 
 namespace TcpServer;
 
@@ -28,27 +28,37 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        services.Configure<TcpServerOptions>(configuration.GetSection(TcpServerOptions.SectionName));
+        services.AddImpiTrackOptionsCore();
+        services
+            .BindOptions<TcpServerOptions>(
+                configuration,
+                TcpServerOptions.SectionName,
+                validateDataAnnotations: false,
+                validateOnStart: true)
+            .Validate(
+                static options => options.Servers.Count > 0,
+                "TcpServerConfig:Servers debe contener al menos un endpoint.");
+
+        services.AddImpiTrackDataAccess(configuration);
 
         services.AddSingleton<ISessionManager, InMemorySessionManager>();
         services.AddSingleton<IPacketIdGenerator, GuidPacketIdGenerator>();
-        services.AddSingleton<IOpsDataStore, InMemoryOpsDataStore>();
         services.AddSingleton<ITcpMetrics, TcpMetrics>();
         services.AddSingleton<IAbuseGuard>(sp =>
         {
-            TcpServerOptions options = sp.GetRequiredService<IOptions<TcpServerOptions>>().Value;
+            TcpServerOptions options = sp.GetRequiredService<IGenericOptionsService<TcpServerOptions>>().GetOptions();
             return new InMemoryAbuseGuard(options.Security);
         });
 
         services.AddSingleton<IProtocolResolver>(sp =>
         {
-            TcpServerOptions options = sp.GetRequiredService<IOptions<TcpServerOptions>>().Value;
+            TcpServerOptions options = sp.GetRequiredService<IGenericOptionsService<TcpServerOptions>>().GetOptions();
             return new PortFirstProtocolResolver(ProtocolMapBuilder.Build(options.Servers));
         });
 
         services.AddSingleton<IInboundQueue>(sp =>
         {
-            TcpServerOptions options = sp.GetRequiredService<IOptions<TcpServerOptions>>().Value;
+            TcpServerOptions options = sp.GetRequiredService<IGenericOptionsService<TcpServerOptions>>().GetOptions();
             return new InMemoryInboundQueue(options.Pipeline.ChannelCapacity);
         });
 
@@ -62,3 +72,4 @@ public static class ServiceCollectionExtensions
         return services;
     }
 }
+

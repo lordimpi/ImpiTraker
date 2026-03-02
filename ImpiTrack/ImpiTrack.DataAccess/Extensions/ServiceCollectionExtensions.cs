@@ -55,6 +55,7 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<SqlDataRepository>();
             services.AddSingleton<IIngestionRepository>(sp => sp.GetRequiredService<SqlDataRepository>());
             services.AddSingleton<IOpsRepository>(sp => sp.GetRequiredService<SqlDataRepository>());
+            services.AddSingleton<IUserAccountRepository>(sp => sp.GetRequiredService<SqlDataRepository>());
             services.AddSingleton<IMigrationRunner, SqlScriptMigrationRunner>();
         }
         else
@@ -63,6 +64,7 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<InMemoryDataRepository>();
             services.AddSingleton<IIngestionRepository>(sp => sp.GetRequiredService<InMemoryDataRepository>());
             services.AddSingleton<IOpsRepository>(sp => sp.GetRequiredService<InMemoryDataRepository>());
+            services.AddSingleton<IUserAccountRepository>(sp => sp.GetRequiredService<InMemoryDataRepository>());
             services.AddSingleton<IMigrationRunner, NoOpMigrationRunner>();
         }
 
