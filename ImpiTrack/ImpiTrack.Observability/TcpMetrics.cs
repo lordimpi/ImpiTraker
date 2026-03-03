@@ -16,6 +16,8 @@ public sealed class TcpMetrics : ITcpMetrics
     private readonly Counter<long> _parseFail = Meter.CreateCounter<long>("tcp_parse_fail_total");
     private readonly Counter<long> _ackSent = Meter.CreateCounter<long>("tcp_ack_sent_total");
     private readonly Histogram<double> _ackLatencyMs = Meter.CreateHistogram<double>("tcp_ack_latency_ms");
+    private readonly Histogram<long> _queueBacklog = Meter.CreateHistogram<long>("tcp_queue_backlog");
+    private readonly Histogram<double> _persistLatencyMs = Meter.CreateHistogram<double>("tcp_persist_latency_ms");
 
     /// <inheritdoc />
     public void RecordConnectionOpened(int port)
@@ -58,6 +60,18 @@ public sealed class TcpMetrics : ITcpMetrics
     {
         _ackSent.Add(1, Tags(port, protocol));
         _ackLatencyMs.Record(latencyMs, Tags(port, protocol));
+    }
+
+    /// <inheritdoc />
+    public void RecordQueueBacklog(int port, ProtocolId protocol, long backlog)
+    {
+        _queueBacklog.Record(backlog, Tags(port, protocol));
+    }
+
+    /// <inheritdoc />
+    public void RecordPersistLatency(int port, ProtocolId protocol, double latencyMs)
+    {
+        _persistLatencyMs.Record(latencyMs, Tags(port, protocol));
     }
 
     private static KeyValuePair<string, object?>[] Tags(int port, ProtocolId protocol)

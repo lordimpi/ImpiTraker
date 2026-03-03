@@ -175,11 +175,15 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                         Imei = envelope.Message.Imei,
                         Protocol = (int)envelope.Message.Protocol,
                         MessageType = (int)envelope.Message.MessageType,
-                        GpsTimeUtc = envelope.Message.ReceivedAtUtc,
-                        Latitude = (decimal?)null,
-                        Longitude = (decimal?)null,
-                        SpeedKmh = (double?)null,
-                        HeadingDeg = (int?)null,
+                        GpsTimeUtc = envelope.Message.GpsTimeUtc ?? envelope.Message.ReceivedAtUtc,
+                        Latitude = envelope.Message.Latitude is null
+                            ? (decimal?)null
+                            : Convert.ToDecimal(envelope.Message.Latitude.Value),
+                        Longitude = envelope.Message.Longitude is null
+                            ? (decimal?)null
+                            : Convert.ToDecimal(envelope.Message.Longitude.Value),
+                        SpeedKmh = envelope.Message.SpeedKmh,
+                        HeadingDeg = envelope.Message.HeadingDeg,
                         CreatedAtUtc = DateTimeOffset.UtcNow
                     },
                     transaction,

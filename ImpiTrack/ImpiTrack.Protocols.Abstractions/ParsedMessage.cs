@@ -9,10 +9,20 @@ namespace ImpiTrack.Protocols.Abstractions;
 /// <param name="RawPayload">Payload original del frame usado por el parser.</param>
 /// <param name="Text">Representacion de texto del payload crudo.</param>
 /// <param name="ReceivedAtUtc">Marca de tiempo UTC de recepcion del frame.</param>
+/// <param name="GpsTimeUtc">Marca de tiempo GPS UTC cuando el protocolo la provee.</param>
+/// <param name="Latitude">Latitud en grados decimales cuando aplica.</param>
+/// <param name="Longitude">Longitud en grados decimales cuando aplica.</param>
+/// <param name="SpeedKmh">Velocidad en km/h cuando aplica.</param>
+/// <param name="HeadingDeg">Rumbo en grados cuando aplica.</param>
 public sealed record ParsedMessage(
     ProtocolId Protocol,
     MessageType MessageType,
     string? Imei,
     ReadOnlyMemory<byte> RawPayload,
     string Text,
-    DateTimeOffset ReceivedAtUtc);
+    DateTimeOffset ReceivedAtUtc,
+    DateTimeOffset? GpsTimeUtc = null,
+    double? Latitude = null,
+    double? Longitude = null,
+    double? SpeedKmh = null,
+    int? HeadingDeg = null);

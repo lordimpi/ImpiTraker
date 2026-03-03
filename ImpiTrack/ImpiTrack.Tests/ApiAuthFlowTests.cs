@@ -85,6 +85,17 @@ public sealed class ApiAuthFlowTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Ready_ShouldReturnOk_WhenStorageIsInMemory()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/ready");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
     private static WebApplicationFactory<Program> CreateFactory()
     {
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>

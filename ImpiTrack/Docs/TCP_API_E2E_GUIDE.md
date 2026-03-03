@@ -115,3 +115,36 @@ Debes ver `packetId`, `sessionId`, `protocol`, `messageType`, `ackSent`.
 - No llega ACK TCP: revisa delimitador (`;` en Coban, `#` en Cantrack).
 - Link de correo no abre: verifica `Email:VerifyEmailBaseUrl` en user-secrets y que apunte a `https://localhost:54124/api/auth/verify-email/confirm`.
 - No aparecen datos en Ops: confirma que el IMEI esté vinculado a un usuario y que ambos procesos (API + TCP) estén levantados.
+
+## 7) Cambiar proveedor de base de datos por variable de entorno
+
+Puedes alternar proveedor sin tocar codigo usando variables `Database__*`.
+
+### 7.1 SQL Server
+
+```powershell
+$env:Database__Provider = "SqlServer"
+$env:Database__ConnectionString = "Data Source=SANTIAGO;Initial Catalog=ImpiTrakDB;Integrated Security=True;Connect Timeout=30;Encrypt=True;Trust Server Certificate=True;"
+$env:Database__EnableAutoMigrate = "true"
+```
+
+### 7.2 PostgreSQL
+
+```powershell
+$env:Database__Provider = "Postgres"
+$env:Database__ConnectionString = "Host=localhost;Port=5432;Database=imptrack;Username=postgres;Password=postgres"
+$env:Database__EnableAutoMigrate = "true"
+```
+
+Luego reinicia API y TCP Server para que tomen la nueva configuracion.
+
+## 8) Criterio de cierre Fase 3 y 4
+
+- Migraciones aplican limpio en el proveedor seleccionado.
+- `dotnet test` pasa en verde.
+- `/ready` responde `200` solo cuando storage esta disponible.
+- Ingesta guarda `RawPackets` siempre y `Positions` con telemetria cuando el payload trae lat/lon.
+- Ops API muestra correlacion por `sessionId` y `packetId`.
+- ACK correcto:
+  - Coban: `LOAD` (login), `ON` (heartbeat/tracking)
+  - Cantrack: echo del payload

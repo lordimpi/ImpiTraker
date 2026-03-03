@@ -11,6 +11,8 @@ using ImpiTrack.DataAccess.Extensions;
 using ImpiTrack.DataAccess.IOptionPattern;
 using ImpiTrack.Shared.Api;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +21,12 @@ using Microsoft.OpenApi;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
+}
 
 builder.Services.AddImpiTrackOptionsCore();
 builder.Services.BindOptions<JwtAuthOptions>(builder.Configuration, JwtAuthOptions.SectionName);
@@ -109,6 +117,8 @@ builder.Services
 
 builder.Services.AddImpiTrackAuthInfrastructure();
 
+const string bearerSecurityScheme = "Bearer";
+
 builder.Services.AddOpenApi(options =>
 {
     options.AddDocumentTransformer((document, context, ct) =>
@@ -118,6 +128,24 @@ builder.Services.AddOpenApi(options =>
             Title = "ImpiTrack WEB API",
             Version = "v1",
             Description = "Documentacion oficial de la API"
+        };
+
+        return Task.CompletedTask;
+    });
+
+    options.AddDocumentTransformer((document, context, ct) =>
+    {
+        document.Components ??= new OpenApiComponents();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+
+        document.Components.SecuritySchemes[bearerSecurityScheme] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT",
+            In = ParameterLocation.Header,
+            Name = "Authorization",
+            Description = "Authorization: Bearer {token}"
         };
 
         return Task.CompletedTask;
@@ -156,6 +184,30 @@ builder.Services.AddOpenApi(options =>
                 };
             }
         }
+
+        return Task.CompletedTask;
+    });
+
+    options.AddOperationTransformer((operation, context, ct) =>
+    {
+        IList<object> endpointMetadata = context.Description.ActionDescriptor.EndpointMetadata;
+        bool allowAnonymous = endpointMetadata.OfType<IAllowAnonymous>().Any();
+        if (allowAnonymous)
+        {
+            return Task.CompletedTask;
+        }
+
+        bool requiresAuthorization = endpointMetadata.OfType<IAuthorizeData>().Any();
+        if (!requiresAuthorization)
+        {
+            return Task.CompletedTask;
+        }
+
+        operation.Security ??= new List<OpenApiSecurityRequirement>();
+        operation.Security.Add(new OpenApiSecurityRequirement
+        {
+            [new OpenApiSecuritySchemeReference(bearerSecurityScheme, context.Document, null)] = new List<string>()
+        });
 
         return Task.CompletedTask;
     });

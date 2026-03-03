@@ -363,6 +363,7 @@ public sealed class Worker : BackgroundService
                                 parsed,
                                 DateTimeOffset.UtcNow),
                             serverToken);
+                        _tcpMetrics.RecordQueueBacklog(endpoint.Port, parsed.Protocol, _inboundQueue.Backlog);
 
                         _logger.LogInformation(
                             "frame_enqueued sessionId={sessionId} packetId={packetId} protocol={protocol} messageType={messageType} imei={imei} port={port} backlog={backlog}",

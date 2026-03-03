@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string]$Host = "127.0.0.1",
+    [Alias("Host")]
+    [string]$ServerHost = "127.0.0.1",
 
     [Parameter(Mandatory = $true)]
     [int]$Port,
@@ -14,7 +15,7 @@ param(
 
 $client = New-Object System.Net.Sockets.TcpClient
 try {
-    $client.Connect($Host, $Port)
+    $client.Connect($ServerHost, $Port)
     $stream = $client.GetStream()
     $stream.ReadTimeout = $ReadTimeoutMs
 
@@ -38,7 +39,7 @@ try {
         $ackText = ""
     }
 
-    Write-Host "Host: $Host"
+    Write-Host "Host: $ServerHost"
     Write-Host "Port: $Port"
     Write-Host "Payload sent: $Payload"
     if ([string]::IsNullOrWhiteSpace($ackText)) {

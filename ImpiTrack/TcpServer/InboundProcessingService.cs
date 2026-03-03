@@ -1,5 +1,6 @@
 ﻿using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Observability;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.Queue;
 
@@ -13,6 +14,7 @@ public sealed class InboundProcessingService : BackgroundService
     private readonly ILogger<InboundProcessingService> _logger;
     private readonly IInboundQueue _inboundQueue;
     private readonly IIngestionRepository _ingestionRepository;
+    private readonly ITcpMetrics _tcpMetrics;
     private readonly int _workerCount;
 
     /// <summary>
@@ -21,16 +23,19 @@ public sealed class InboundProcessingService : BackgroundService
     /// <param name="logger">Instancia de logger.</param>
     /// <param name="inboundQueue">Abstraccion de cola entrante.</param>
     /// <param name="ingestionRepository">Repositorio de persistencia downstream.</param>
-    /// <param name="options">Opciones del servidor.</param>
+    /// <param name="tcpMetrics">Publicador de metricas operativas TCP.</param>
+    /// <param name="optionsService">Opciones del servidor.</param>
     public InboundProcessingService(
         ILogger<InboundProcessingService> logger,
         IInboundQueue inboundQueue,
         IIngestionRepository ingestionRepository,
+        ITcpMetrics tcpMetrics,
         IGenericOptionsService<TcpServerOptions> optionsService)
     {
         _logger = logger;
         _inboundQueue = inboundQueue;
         _ingestionRepository = ingestionRepository;
+        _tcpMetrics = tcpMetrics;
         _workerCount = Math.Max(1, optionsService.GetOptions().Pipeline.ConsumerWorkers);
     }
 
@@ -60,6 +65,14 @@ public sealed class InboundProcessingService : BackgroundService
                 DateTimeOffset startedAtUtc = DateTimeOffset.UtcNow;
                 await _ingestionRepository.PersistEnvelopeAsync(envelope, cancellationToken);
                 double persistLatencyMs = (DateTimeOffset.UtcNow - startedAtUtc).TotalMilliseconds;
+                _tcpMetrics.RecordPersistLatency(
+                    envelope.Port,
+                    envelope.Message.Protocol,
+                    persistLatencyMs);
+                _tcpMetrics.RecordQueueBacklog(
+                    envelope.Port,
+                    envelope.Message.Protocol,
+                    _inboundQueue.Backlog);
 
                 _logger.LogInformation(
                     "queue_consume worker={workerNumber} sessionId={sessionId} packetId={packetId} protocol={protocol} messageType={messageType} imei={imei} backlog={backlog} persistLatencyMs={persistLatencyMs}",

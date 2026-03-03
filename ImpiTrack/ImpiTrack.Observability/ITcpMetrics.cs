@@ -48,4 +48,20 @@ public interface ITcpMetrics
     /// <param name="protocol">Protocolo del mensaje.</param>
     /// <param name="latencyMs">Latencia de envio del ACK en milisegundos.</param>
     void RecordAck(int port, ProtocolId protocol, double latencyMs);
+
+    /// <summary>
+    /// Registra una muestra de backlog actual de la cola de ingestiones.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado al mensaje.</param>
+    /// <param name="backlog">Cantidad de elementos pendientes en cola.</param>
+    void RecordQueueBacklog(int port, ProtocolId protocol, long backlog);
+
+    /// <summary>
+    /// Registra latencia de persistencia downstream por mensaje.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo del mensaje.</param>
+    /// <param name="latencyMs">Latencia de persistencia en milisegundos.</param>
+    void RecordPersistLatency(int port, ProtocolId protocol, double latencyMs);
 }
