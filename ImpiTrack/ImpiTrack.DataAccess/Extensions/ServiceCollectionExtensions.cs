@@ -34,9 +34,8 @@ public static class ServiceCollectionExtensions
             .BindOptions<DatabaseOptions>(configuration, DatabaseOptions.SectionName)
             .Validate(
                 static options =>
-                    DatabaseProviderParser.TryParse(options.Provider, out DatabaseProvider provider) &&
-                    (provider == DatabaseProvider.InMemory || !string.IsNullOrWhiteSpace(options.ConnectionString)),
-                "Database:ConnectionString es obligatoria cuando Provider es SqlServer o Postgres.");
+                    DatabaseProviderParser.TryParse(options.Provider, out _),
+                "Database:Provider debe ser InMemory, SqlServer o Postgres.");
 
         services.AddSingleton<DatabaseRuntimeContext>();
 
@@ -45,9 +44,17 @@ public static class ServiceCollectionExtensions
             .Get<DatabaseOptions>() ?? new DatabaseOptions();
 
         DatabaseProvider provider = DatabaseProviderParser.Parse(options.Provider);
-        bool sqlEnabled =
-            provider is DatabaseProvider.SqlServer or DatabaseProvider.Postgres &&
-            !string.IsNullOrWhiteSpace(options.ConnectionString);
+        string? resolvedConnectionString = ProviderConnectionStringResolver.ResolveDatabaseConnectionString(
+            configuration,
+            provider,
+            options.ConnectionString);
+
+        bool sqlEnabled = provider is DatabaseProvider.SqlServer or DatabaseProvider.Postgres;
+        if (sqlEnabled && string.IsNullOrWhiteSpace(resolvedConnectionString))
+        {
+            throw new InvalidOperationException(
+                $"database_connection_string_missing provider={provider} keys=Database:ConnectionString|ConnectionStrings:SqlServer|ConnectionStrings:Postgres");
+        }
 
         if (sqlEnabled)
         {

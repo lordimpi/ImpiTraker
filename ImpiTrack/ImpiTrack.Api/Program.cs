@@ -66,26 +66,33 @@ DatabaseOptions database = builder.Configuration
     .GetSection(DatabaseOptions.SectionName)
     .Get<DatabaseOptions>() ?? new DatabaseOptions();
 
-string? identityConnection =
-    !string.IsNullOrWhiteSpace(identityStorage.ConnectionString)
-        ? identityStorage.ConnectionString
-        : database.ConnectionString;
+DatabaseProvider identityProvider = DatabaseProviderParser.Parse(identityStorage.Provider);
+string? identityConnection = ProviderConnectionStringResolver.ResolveIdentityConnectionString(
+    builder.Configuration,
+    identityProvider,
+    identityStorage.ConnectionString);
 
-bool useIdentitySqlServer =
-    string.Equals(identityStorage.Provider, "SqlServer", StringComparison.OrdinalIgnoreCase);
+bool useIdentitySqlServer = identityProvider == DatabaseProvider.SqlServer;
 string identityInMemoryDatabaseName = builder.Environment.IsEnvironment("Testing")
     ? $"ImpiTrack.Identity.{Guid.NewGuid():N}"
     : "ImpiTrack.Identity";
+
+if (identityProvider == DatabaseProvider.Postgres)
+{
+    throw new InvalidOperationException(
+        "identity_provider_not_supported_for_net10 provider=Postgres action=use_inmemory_or_sqlserver");
+}
+
+if (useIdentitySqlServer && string.IsNullOrWhiteSpace(identityConnection))
+{
+    throw new InvalidOperationException(
+        "identity_connection_string_missing provider=SqlServer keys=IdentityStorage:ConnectionString|ConnectionStrings:IdentitySqlServer|ConnectionStrings:SqlServer");
+}
 
 builder.Services.AddDbContext<IdentityAppDbContext>(options =>
 {
     if (useIdentitySqlServer)
     {
-        if (string.IsNullOrWhiteSpace(identityConnection))
-        {
-            throw new InvalidOperationException("identity_connection_string_missing");
-        }
-
         options.UseSqlServer(identityConnection, sql =>
         {
             sql.CommandTimeout(Math.Max(1, database.CommandTimeoutSeconds));

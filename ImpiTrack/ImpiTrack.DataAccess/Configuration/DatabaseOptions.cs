@@ -19,7 +19,8 @@ public sealed class DatabaseOptions
     public string Provider { get; set; } = "InMemory";
 
     /// <summary>
-    /// Cadena de conexion al proveedor configurado.
+    /// Cadena de conexion explicita al proveedor configurado.
+    /// Si esta vacia, se intenta resolver desde ConnectionStrings segun el Provider.
     /// </summary>
     public string? ConnectionString { get; set; }
 

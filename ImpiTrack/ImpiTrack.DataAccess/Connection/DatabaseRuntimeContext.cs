@@ -1,5 +1,6 @@
-﻿using ImpiTrack.DataAccess.Configuration;
+using ImpiTrack.DataAccess.Configuration;
 using ImpiTrack.DataAccess.IOptionPattern;
+using Microsoft.Extensions.Configuration;
 
 namespace ImpiTrack.DataAccess.Connection;
 
@@ -11,12 +12,18 @@ public sealed class DatabaseRuntimeContext
     /// <summary>
     /// Crea un contexto de runtime a partir de opciones enlazadas.
     /// </summary>
+    /// <param name="configuration">Configuración raíz para resolver ConnectionStrings por proveedor.</param>
     /// <param name="optionsService">Servicio de opciones tipadas.</param>
-    public DatabaseRuntimeContext(IGenericOptionsService<DatabaseOptions> optionsService)
+    public DatabaseRuntimeContext(
+        IConfiguration configuration,
+        IGenericOptionsService<DatabaseOptions> optionsService)
     {
         DatabaseOptions value = optionsService.GetOptions();
         Provider = DatabaseProviderParser.Parse(value.Provider);
-        ConnectionString = value.ConnectionString;
+        ConnectionString = ProviderConnectionStringResolver.ResolveDatabaseConnectionString(
+            configuration,
+            Provider,
+            value.ConnectionString);
         CommandTimeoutSeconds = Math.Max(1, value.CommandTimeoutSeconds);
         EnableAutoMigrate = value.EnableAutoMigrate;
     }
@@ -48,5 +55,3 @@ public sealed class DatabaseRuntimeContext
         Provider is DatabaseProvider.SqlServer or DatabaseProvider.Postgres &&
         !string.IsNullOrWhiteSpace(ConnectionString);
 }
-
-

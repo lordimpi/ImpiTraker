@@ -1,64 +1,34 @@
-# Guía E2E: API + TCP Server (IMPITrack)
+# Guia E2E: API + TCP Server (IMPITrack)
 
-Esta guía te permite validar el backend completo en local: autenticación, vinculación de GPS, ingestión TCP y diagnóstico por Ops API.
+Esta guia valida backend local completo: auth, vinculacion de GPS, ingesta TCP y observabilidad Ops.
 
 ## 1) Prerrequisitos
 
-- SQL Server activo (`ImpiTrakDB`).
 - .NET 10 instalado.
-- User Secrets configurados para correo (opcional para pruebas de verify por link).
+- SQL Server disponible (si usaras SqlServer).
+- PostgreSQL disponible (si usaras Postgres).
+- User Secrets configurados para SMTP (opcional).
 
-## 2) Arranque correcto
+## 2) Arranque base
 
-Levanta primero la API (owner de migraciones SQL), luego el TCP Server.
+Levanta primero la API y luego TCP Server:
 
 ```powershell
 dotnet run --project ImpiTrack/ImpiTrack.Api/ImpiTrack.Api.csproj
 dotnet run --project ImpiTrack/TcpServer/TcpServer.csproj
 ```
 
-Valores actuales en Development:
+Valores Development actuales:
 - API: `https://localhost:54124` (`http://localhost:54125`)
 - TCP Coban: `5001`
 - TCP Cantrack: `5002`
 
 ## 3) Flujo API (usuario final)
 
-### 3.1 Registrar usuario
-
-`POST https://localhost:54124/api/auth/register`
-
-```json
-{
-  "userName": "demo.user",
-  "email": "demo.user@imptrack.local",
-  "password": "ChangeMe!123",
-  "fullName": "Demo User"
-}
-```
-
-### 3.2 Verificar correo
-
-Opción A (recomendada para humanos): usa el link del correo (`GET /api/auth/verify-email/confirm?...`).
-
-Opción B (técnica): `POST /api/auth/verify-email` con `userId` y `token`.
-
-### 3.3 Login y token
-
-`POST https://localhost:54124/api/auth/login`
-
-```json
-{
-  "userNameOrEmail": "demo.user",
-  "password": "ChangeMe!123"
-}
-```
-
-Guarda `data.accessToken`.
-
-### 3.4 Vincular IMEI al usuario
-
-`POST https://localhost:54124/api/me/devices` con Bearer token:
+1. `POST /api/auth/register`
+2. Confirmar correo por `GET /api/auth/verify-email/confirm?...` (o `POST /api/auth/verify-email`)
+3. `POST /api/auth/login` y guardar `data.accessToken`
+4. `POST /api/me/devices` con Bearer token:
 
 ```json
 {
@@ -68,39 +38,29 @@ Guarda `data.accessToken`.
 
 ## 4) Simular GPS por TCP
 
-Usa el script `Documents/Send-TcpPayload.ps1`.
+Usa `ImpiTrack/Tools/Send-TcpPayload.ps1`.
 
-### 4.1 Coban (puerto 5001)
-
+### Coban (5001)
 ```powershell
-.\Documents\Send-TcpPayload.ps1 -Port 5001 -Payload "##,imei:359586015829802,A;"
-.\Documents\Send-TcpPayload.ps1 -Port 5001 -Payload "359586015829802;"
-.\Documents\Send-TcpPayload.ps1 -Port 5001 -Payload "imei:359586015829802,tracker,250301123045,,A;"
+.\ImpiTrack\Tools\Send-TcpPayload.ps1 -Port 5001 -Payload "##,imei:359586015829802,A;"
+.\ImpiTrack\Tools\Send-TcpPayload.ps1 -Port 5001 -Payload "359586015829802;"
+.\ImpiTrack\Tools\Send-TcpPayload.ps1 -Port 5001 -Payload "imei:359586015829802,tracker,250301123045,,A;"
 ```
 
-ACK esperado:
-- Login: `LOAD`
-- Heartbeat/Tracking: `ON`
+ACK esperado: `LOAD` (login), `ON` (heartbeat/tracking).
 
-### 4.2 Cantrack (puerto 5002)
-
+### Cantrack (5002)
 ```powershell
-.\Documents\Send-TcpPayload.ps1 -Port 5002 -Payload "*HQ,359586015829802,V0#"
-.\Documents\Send-TcpPayload.ps1 -Port 5002 -Payload "*HQ,359586015829802,HTBT#"
-.\Documents\Send-TcpPayload.ps1 -Port 5002 -Payload "*HQ,359586015829802,V1,250301,123045,A#"
+.\ImpiTrack\Tools\Send-TcpPayload.ps1 -Port 5002 -Payload "*HQ,359586015829802,V0#"
+.\ImpiTrack\Tools\Send-TcpPayload.ps1 -Port 5002 -Payload "*HQ,359586015829802,HTBT#"
+.\ImpiTrack\Tools\Send-TcpPayload.ps1 -Port 5002 -Payload "*HQ,359586015829802,V1,250301,123045,A#"
 ```
 
-ACK esperado:
-- Eco del payload recibido.
+ACK esperado: eco del payload recibido.
 
 ## 5) Validar por Ops API (admin)
 
-Login admin:
-- Usuario: `admin`
-- Password: `ChangeMe!123`
-
-Con token admin, consulta:
-
+Con token admin:
 - `GET /api/ops/raw/latest?imei=359586015829802&limit=20`
 - `GET /api/ops/sessions/active`
 - `GET /api/ops/ingestion/ports`
@@ -108,43 +68,69 @@ Con token admin, consulta:
 
 Debes ver `packetId`, `sessionId`, `protocol`, `messageType`, `ackSent`.
 
-## 6) Troubleshooting rápido
+## 6) Cambiar proveedor desde appsettings (sin variables de entorno)
 
-- `401` en `/api/me` o `/api/ops`: token inválido o faltante.
-- `403` en `/api/ops`: no usaste token admin.
-- No llega ACK TCP: revisa delimitador (`;` en Coban, `#` en Cantrack).
-- Link de correo no abre: verifica `Email:VerifyEmailBaseUrl` en user-secrets y que apunte a `https://localhost:54124/api/auth/verify-email/confirm`.
-- No aparecen datos en Ops: confirma que el IMEI esté vinculado a un usuario y que ambos procesos (API + TCP) estén levantados.
+Archivos:
+- API: `ImpiTrack/ImpiTrack.Api/appsettings.Development.json`
+- TCP: `ImpiTrack/TcpServer/appsettings.json`
 
-## 7) Cambiar proveedor de base de datos por variable de entorno
+Claves que controlan el switch:
+- `Database:Provider` (`SqlServer` o `Postgres`)
+- `IdentityStorage:Provider` (`SqlServer` o `InMemory`) en API
+- `ConnectionStrings:SqlServer` / `ConnectionStrings:Postgres`
+- `ConnectionStrings:IdentitySqlServer` / `ConnectionStrings:IdentityPostgres`
 
-Puedes alternar proveedor sin tocar codigo usando variables `Database__*`.
+Ejemplo SQL Server:
+- `Database:Provider = SqlServer`
+- `IdentityStorage:Provider = SqlServer`
 
-### 7.1 SQL Server
+Ejemplo PostgreSQL:
+- `Database:Provider = Postgres`
+- `IdentityStorage:Provider = InMemory` (temporal en net10 estable)
+
+## 7) Smoke por proveedor (automatizado)
+
+Script: `ImpiTrack/Tools/Run-ProviderSmoke.ps1`
 
 ```powershell
-$env:Database__Provider = "SqlServer"
-$env:Database__ConnectionString = "Data Source=SANTIAGO;Initial Catalog=ImpiTrakDB;Integrated Security=True;Connect Timeout=30;Encrypt=True;Trust Server Certificate=True;"
-$env:Database__EnableAutoMigrate = "true"
+# Ejecuta SqlServer + Postgres
+.\ImpiTrack\Tools\Run-ProviderSmoke.ps1 -Provider Both
+
+# Solo SQL Server (conexion personalizada)
+.\ImpiTrack\Tools\Run-ProviderSmoke.ps1 -Provider SqlServer `
+  -SqlServerConnectionString "Data Source=SANTIAGO;Initial Catalog=ImpiTrakDB;Integrated Security=True;Encrypt=False;Trust Server Certificate=True;"
+
+# Solo Postgres (conexion personalizada)
+.\ImpiTrack\Tools\Run-ProviderSmoke.ps1 -Provider Postgres `
+  -PostgresConnectionString "Host=localhost;Port=5432;Database=imptrack;Username=postgres;Password=postgres"
 ```
 
-### 7.2 PostgreSQL
+Notas del script:
+- Fuerza `IdentityStorage:Provider=InMemory` para aislar la prueba de negocio/API del provider de Identity.
+- Fuerza `Database:EnableAutoMigrate=true`.
+- Valida `/ready` y deja logs en `ImpiTrack/.artifacts/smoke-*.out.log` y `ImpiTrack/.artifacts/smoke-*.err.log`.
 
-```powershell
-$env:Database__Provider = "Postgres"
-$env:Database__ConnectionString = "Host=localhost;Port=5432;Database=imptrack;Username=postgres;Password=postgres"
-$env:Database__EnableAutoMigrate = "true"
-```
+## 8) Criterio de cierre Fase 3/4
 
-Luego reinicia API y TCP Server para que tomen la nueva configuracion.
-
-## 8) Criterio de cierre Fase 3 y 4
-
-- Migraciones aplican limpio en el proveedor seleccionado.
+- Migraciones aplican limpio en proveedor seleccionado.
 - `dotnet test` pasa en verde.
-- `/ready` responde `200` solo cuando storage esta disponible.
-- Ingesta guarda `RawPackets` siempre y `Positions` con telemetria cuando el payload trae lat/lon.
-- Ops API muestra correlacion por `sessionId` y `packetId`.
-- ACK correcto:
-  - Coban: `LOAD` (login), `ON` (heartbeat/tracking)
-  - Cantrack: echo del payload
+- `/ready` responde `200` con storage disponible.
+- Ingesta persiste `raw_packets` y telemetria en `positions` cuando aplica.
+- Ops expone correlacion por `sessionId` y `packetId`.
+
+Estado actual recomendado para cierre:
+- Fase 3: cerrada con SQL Server.
+- Fase 4: cerrada para capa de negocio multi-proveedor (SqlServer/Postgres).
+- Identity en Postgres: diferido en net10 estable (usar `IdentityStorage:Provider=InMemory` o `SqlServer`).
+
+## 9) Troubleshooting de proveedores
+
+- SQL Server `SSPI` (`No se puede generar contexto SSPI`):
+  usa un usuario SQL dedicado en vez de `Integrated Security=True`, o valida SPN/Kerberos del host SQL.
+- SQL Server `TcpTestSucceeded=False` en `SANTIAGO:1433`:
+  habilita TCP/IP en SQL Server Configuration Manager y revisa firewall/regla del puerto 1433.
+- PostgreSQL `28P01 password authentication failed`:
+  corrige `Username/Password` o crea el usuario/DB objetivo antes del smoke.
+- PostgreSQL en Identity (`MissingMethodException`):
+  en net10 estable, configura `IdentityStorage:Provider=InMemory` o `SqlServer`.
+  Si pones `Postgres`, la API ahora falla al inicio con error explicito.

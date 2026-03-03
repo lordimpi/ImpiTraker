@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+Ôªøusing System.ComponentModel.DataAnnotations;
 
 namespace ImpiTrack.Auth.Infrastructure.Configuration;
 
@@ -8,18 +8,20 @@ namespace ImpiTrack.Auth.Infrastructure.Configuration;
 public sealed class IdentityStorageOptions
 {
     /// <summary>
-    /// Nombre de la secciÛn de configuraciÛn.
+    /// Nombre de la secci√≥n de configuraci√≥n.
     /// </summary>
     public const string SectionName = "IdentityStorage";
 
     /// <summary>
-    /// Proveedor de Identity. Valores v·lidos: SqlServer o InMemory.
+    /// Proveedor de Identity. Valores validos: SqlServer o InMemory.
+    /// Postgres no esta soportado en net10 estable para Identity.
     /// </summary>
     [Required]
     public string Provider { get; set; } = "InMemory";
 
     /// <summary>
-    /// Cadena de conexiÛn SQL cuando Provider es SqlServer.
+    /// Cadena de conexi√≥n expl√≠cita para el proveedor seleccionado.
+    /// Si est√° vac√≠a, se resuelve desde ConnectionStrings.
     /// </summary>
     public string? ConnectionString { get; set; }
 }
