@@ -48,33 +48,13 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 record.Imei,
                 cancellationToken);
 
-            CommandDefinition insertRaw = new(
-                GetInsertRawPacketSql(_context.Provider),
-                new
-                {
-                    PacketId = record.PacketId.Value,
-                    SessionId = record.SessionId.Value,
-                    DeviceId = deviceId,
-                    Imei = record.Imei,
-                    Port = record.Port,
-                    RemoteIp = record.RemoteIp,
-                    Protocol = (int)record.Protocol,
-                    MessageType = (int)record.MessageType,
-                    PayloadText = record.PayloadText,
-                    ReceivedAtUtc = record.ReceivedAtUtc,
-                    ParseStatus = (int)record.ParseStatus,
-                    ParseError = record.ParseError,
-                    AckSent = record.AckSent,
-                    AckPayload = record.AckPayload,
-                    AckAtUtc = record.AckAtUtc,
-                    AckLatencyMs = record.AckLatencyMs,
-                    QueueBacklog = backlog
-                },
+            await UpsertRawPacketAsync(
+                connection,
                 transaction,
-                _context.CommandTimeoutSeconds,
-                cancellationToken: cancellationToken);
-
-            await connection.ExecuteAsync(insertRaw);
+                record,
+                deviceId,
+                backlog,
+                cancellationToken);
 
             CommandDefinition upsertSnapshot = new(
                 GetUpsertPortSnapshotSql(_context.Provider),
@@ -166,6 +146,29 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 await transaction.CommitAsync(cancellationToken);
                 return new PersistEnvelopeResult(PersistEnvelopeStatus.SkippedUnownedDevice);
             }
+
+            await UpsertRawPacketAsync(
+                connection,
+                transaction,
+                new RawPacketRecord(
+                    envelope.SessionId,
+                    envelope.PacketId,
+                    envelope.Port,
+                    envelope.RemoteIp,
+                    envelope.Message.Protocol,
+                    envelope.Message.Imei,
+                    envelope.Message.MessageType,
+                    envelope.Message.Text,
+                    envelope.Message.ReceivedAtUtc,
+                    RawParseStatus.Ok,
+                    null,
+                    false,
+                    null,
+                    null,
+                    null),
+                deviceId,
+                backlog: 0,
+                cancellationToken);
 
             if (envelope.Message.MessageType == MessageType.Tracking)
             {
@@ -753,6 +756,43 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
 
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(source));
         return Convert.ToHexString(hash);
+    }
+
+    private async Task UpsertRawPacketAsync(
+        IDbConnection connection,
+        IDbTransaction transaction,
+        RawPacketRecord record,
+        Guid? deviceId,
+        long backlog,
+        CancellationToken cancellationToken)
+    {
+        CommandDefinition upsertRaw = new(
+            GetUpsertRawPacketSql(_context.Provider),
+            new
+            {
+                PacketId = record.PacketId.Value,
+                SessionId = record.SessionId.Value,
+                DeviceId = deviceId,
+                Imei = record.Imei,
+                Port = record.Port,
+                RemoteIp = record.RemoteIp,
+                Protocol = (int)record.Protocol,
+                MessageType = (int)record.MessageType,
+                PayloadText = record.PayloadText,
+                ReceivedAtUtc = record.ReceivedAtUtc,
+                ParseStatus = (int)record.ParseStatus,
+                ParseError = record.ParseError,
+                AckSent = record.AckSent,
+                AckPayload = record.AckPayload,
+                AckAtUtc = record.AckAtUtc,
+                AckLatencyMs = record.AckLatencyMs,
+                QueueBacklog = backlog
+            },
+            transaction,
+            _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        await connection.ExecuteAsync(upsertRaw);
     }
 
     private static bool IsDuplicateKey(Exception exception)
@@ -1561,13 +1601,43 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         };
     }
 
-    private static string GetInsertRawPacketSql(DatabaseProvider provider)
+    private static string GetUpsertRawPacketSql(DatabaseProvider provider)
     {
         return provider switch
         {
             DatabaseProvider.SqlServer =>
                 """
-                IF NOT EXISTS (SELECT 1 FROM raw_packets WHERE packet_id = @PacketId)
+                IF EXISTS (SELECT 1 FROM raw_packets WHERE packet_id = @PacketId)
+                BEGIN
+                    UPDATE raw_packets
+                    SET session_id = @SessionId,
+                        device_id = COALESCE(@DeviceId, device_id),
+                        imei = COALESCE(@Imei, imei),
+                        port = @Port,
+                        remote_ip = @RemoteIp,
+                        protocol = @Protocol,
+                        message_type = @MessageType,
+                        payload_text = CASE WHEN LEN(@PayloadText) > 0 THEN @PayloadText ELSE payload_text END,
+                        received_at_utc = CASE
+                            WHEN @ReceivedAtUtc < received_at_utc THEN @ReceivedAtUtc
+                            ELSE received_at_utc
+                        END,
+                        parse_status = @ParseStatus,
+                        parse_error = COALESCE(@ParseError, parse_error),
+                        ack_sent = CASE
+                            WHEN @AckSent = 1 OR ack_sent = 1 THEN 1
+                            ELSE 0
+                        END,
+                        ack_payload = COALESCE(@AckPayload, ack_payload),
+                        ack_at_utc = COALESCE(@AckAtUtc, ack_at_utc),
+                        ack_latency_ms = COALESCE(@AckLatencyMs, ack_latency_ms),
+                        queue_backlog = CASE
+                            WHEN @QueueBacklog > 0 THEN @QueueBacklog
+                            ELSE queue_backlog
+                        END
+                    WHERE packet_id = @PacketId;
+                END
+                ELSE
                 BEGIN
                     INSERT INTO raw_packets
                     (
@@ -1597,7 +1667,30 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     @PayloadText, @ReceivedAtUtc, @ParseStatus, @ParseError,
                     @AckSent, @AckPayload, @AckAtUtc, @AckLatencyMs, @QueueBacklog
                 )
-                ON CONFLICT (packet_id) DO NOTHING;
+                ON CONFLICT (packet_id)
+                DO UPDATE SET
+                    session_id = EXCLUDED.session_id,
+                    device_id = COALESCE(EXCLUDED.device_id, raw_packets.device_id),
+                    imei = COALESCE(EXCLUDED.imei, raw_packets.imei),
+                    port = EXCLUDED.port,
+                    remote_ip = EXCLUDED.remote_ip,
+                    protocol = EXCLUDED.protocol,
+                    message_type = EXCLUDED.message_type,
+                    payload_text = CASE
+                        WHEN LENGTH(EXCLUDED.payload_text) > 0 THEN EXCLUDED.payload_text
+                        ELSE raw_packets.payload_text
+                    END,
+                    received_at_utc = LEAST(raw_packets.received_at_utc, EXCLUDED.received_at_utc),
+                    parse_status = EXCLUDED.parse_status,
+                    parse_error = COALESCE(EXCLUDED.parse_error, raw_packets.parse_error),
+                    ack_sent = raw_packets.ack_sent OR EXCLUDED.ack_sent,
+                    ack_payload = COALESCE(EXCLUDED.ack_payload, raw_packets.ack_payload),
+                    ack_at_utc = COALESCE(EXCLUDED.ack_at_utc, raw_packets.ack_at_utc),
+                    ack_latency_ms = COALESCE(EXCLUDED.ack_latency_ms, raw_packets.ack_latency_ms),
+                    queue_backlog = CASE
+                        WHEN EXCLUDED.queue_backlog > 0 THEN EXCLUDED.queue_backlog
+                        ELSE raw_packets.queue_backlog
+                    END;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_insert")
         };
