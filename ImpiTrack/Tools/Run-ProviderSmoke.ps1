@@ -119,7 +119,7 @@ function Invoke-Smoke {
         Set-EnvValue -Name "Database__EnableAutoMigrate" -Value "true"
 
         $process = Start-Process -FilePath "dotnet" `
-            -ArgumentList @("run", "--no-build", "--project", $apiProject) `
+            -ArgumentList @("run", "--no-launch-profile", "--no-build", "--project", $apiProject) `
             -WorkingDirectory $repoRoot `
             -RedirectStandardOutput $stdOutLogPath `
             -RedirectStandardError $stdErrLogPath `

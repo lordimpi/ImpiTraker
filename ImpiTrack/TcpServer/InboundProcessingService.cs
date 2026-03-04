@@ -1,7 +1,10 @@
-﻿using ImpiTrack.DataAccess.Abstractions;
+using System.Diagnostics;
+using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.IOptionPattern;
 using ImpiTrack.Observability;
+using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Configuration;
+using ImpiTrack.Tcp.Core.EventBus;
 using ImpiTrack.Tcp.Core.Queue;
 
 namespace TcpServer;
@@ -15,6 +18,8 @@ public sealed class InboundProcessingService : BackgroundService
     private readonly IInboundQueue _inboundQueue;
     private readonly IIngestionRepository _ingestionRepository;
     private readonly ITcpMetrics _tcpMetrics;
+    private readonly IEventBus _eventBus;
+    private readonly EventBusOptions _eventBusOptions;
     private readonly int _workerCount;
 
     /// <summary>
@@ -24,19 +29,25 @@ public sealed class InboundProcessingService : BackgroundService
     /// <param name="inboundQueue">Abstraccion de cola entrante.</param>
     /// <param name="ingestionRepository">Repositorio de persistencia downstream.</param>
     /// <param name="tcpMetrics">Publicador de metricas operativas TCP.</param>
+    /// <param name="eventBus">Bus de eventos interno para contratos canonicos.</param>
     /// <param name="optionsService">Opciones del servidor.</param>
+    /// <param name="eventBusOptionsService">Opciones del bus de eventos.</param>
     public InboundProcessingService(
         ILogger<InboundProcessingService> logger,
         IInboundQueue inboundQueue,
         IIngestionRepository ingestionRepository,
         ITcpMetrics tcpMetrics,
-        IGenericOptionsService<TcpServerOptions> optionsService)
+        IEventBus eventBus,
+        IGenericOptionsService<TcpServerOptions> optionsService,
+        IGenericOptionsService<EventBusOptions> eventBusOptionsService)
     {
         _logger = logger;
         _inboundQueue = inboundQueue;
         _ingestionRepository = ingestionRepository;
         _tcpMetrics = tcpMetrics;
+        _eventBus = eventBus;
         _workerCount = Math.Max(1, optionsService.GetOptions().Pipeline.ConsumerWorkers);
+        _eventBusOptions = eventBusOptionsService.GetOptions();
     }
 
     /// <summary>
@@ -63,7 +74,8 @@ public sealed class InboundProcessingService : BackgroundService
             {
                 InboundEnvelope envelope = await _inboundQueue.DequeueAsync(cancellationToken);
                 DateTimeOffset startedAtUtc = DateTimeOffset.UtcNow;
-                await _ingestionRepository.PersistEnvelopeAsync(envelope, cancellationToken);
+
+                PersistEnvelopeResult persistResult = await _ingestionRepository.PersistEnvelopeAsync(envelope, cancellationToken);
                 double persistLatencyMs = (DateTimeOffset.UtcNow - startedAtUtc).TotalMilliseconds;
                 _tcpMetrics.RecordPersistLatency(
                     envelope.Port,
@@ -73,9 +85,18 @@ public sealed class InboundProcessingService : BackgroundService
                     envelope.Port,
                     envelope.Message.Protocol,
                     _inboundQueue.Backlog);
+                if (persistResult.Status == PersistEnvelopeStatus.Deduplicated)
+                {
+                    _tcpMetrics.RecordDedupeDrop(envelope.Port, envelope.Message.Protocol);
+                }
+
+                if (persistResult.Status != PersistEnvelopeStatus.SkippedUnownedDevice)
+                {
+                    await PublishCanonicalEventsAsync(envelope, cancellationToken);
+                }
 
                 _logger.LogInformation(
-                    "queue_consume worker={workerNumber} sessionId={sessionId} packetId={packetId} protocol={protocol} messageType={messageType} imei={imei} backlog={backlog} persistLatencyMs={persistLatencyMs}",
+                    "queue_consume worker={workerNumber} sessionId={sessionId} packetId={packetId} protocol={protocol} messageType={messageType} imei={imei} backlog={backlog} persistLatencyMs={persistLatencyMs} persistStatus={persistStatus}",
                     workerNumber,
                     envelope.SessionId,
                     envelope.PacketId,
@@ -83,7 +104,8 @@ public sealed class InboundProcessingService : BackgroundService
                     envelope.Message.MessageType,
                     envelope.Message.Imei ?? "n/a",
                     _inboundQueue.Backlog,
-                    persistLatencyMs);
+                    persistLatencyMs,
+                    persistResult.Status);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -95,6 +117,203 @@ public sealed class InboundProcessingService : BackgroundService
             }
         }
     }
+
+    private async Task PublishCanonicalEventsAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(envelope.Message.Imei))
+        {
+            return;
+        }
+
+        string imei = envelope.Message.Imei;
+        string telemetryTopic = $"v1/telemetry/{imei}";
+        string statusTopic = $"v1/status/{imei}";
+
+        var telemetry = new TelemetryEventV1(
+            "1.0",
+            Guid.NewGuid(),
+            envelope.Message.GpsTimeUtc ?? envelope.Message.ReceivedAtUtc,
+            envelope.Message.ReceivedAtUtc,
+            imei,
+            envelope.Message.Protocol,
+            envelope.Message.MessageType,
+            envelope.SessionId,
+            envelope.PacketId,
+            envelope.RemoteIp,
+            envelope.Port,
+            envelope.Message.GpsTimeUtc,
+            envelope.Message.Latitude,
+            envelope.Message.Longitude,
+            envelope.Message.SpeedKmh,
+            envelope.Message.HeadingDeg,
+            envelope.PacketId);
+
+        await PublishWithRetryAsync(
+            telemetryTopic,
+            telemetry,
+            envelope,
+            "telemetry_v1",
+            cancellationToken);
+
+        if (TryBuildStatusEvent(envelope, imei, out DeviceStatusEventV1? statusEvent) &&
+            statusEvent is not null)
+        {
+            await PublishWithRetryAsync(
+                statusTopic,
+                statusEvent,
+                envelope,
+                "status_v1",
+                cancellationToken);
+        }
+    }
+
+    private async Task PublishWithRetryAsync<TPayload>(
+        string topic,
+        TPayload payload,
+        InboundEnvelope envelope,
+        string eventType,
+        CancellationToken cancellationToken)
+    {
+        int maxRetries = Math.Max(0, _eventBusOptions.MaxPublishRetries);
+        int retries = 0;
+
+        while (true)
+        {
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            try
+            {
+                await _eventBus.PublishAsync(topic, payload, cancellationToken);
+                stopwatch.Stop();
+                _tcpMetrics.RecordEventPublishSuccess(
+                    envelope.Port,
+                    envelope.Message.Protocol,
+                    eventType,
+                    stopwatch.Elapsed.TotalMilliseconds);
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                if (retries >= maxRetries)
+                {
+                    _tcpMetrics.RecordEventPublishFailure(
+                        envelope.Port,
+                        envelope.Message.Protocol,
+                        eventType);
+
+                    _logger.LogError(
+                        ex,
+                        "event_publish_failed sessionId={sessionId} packetId={packetId} protocol={protocol} eventType={eventType} topic={topic} retries={retries}",
+                        envelope.SessionId,
+                        envelope.PacketId,
+                        envelope.Message.Protocol,
+                        eventType,
+                        topic,
+                        retries);
+
+                    if (_eventBusOptions.EnableDlq)
+                    {
+                        await TryPublishDlqAsync(topic, eventType, envelope, ex, retries, cancellationToken);
+                    }
+
+                    return;
+                }
+
+                retries++;
+                _tcpMetrics.RecordEventPublishRetry(
+                    envelope.Port,
+                    envelope.Message.Protocol,
+                    eventType);
+
+                int baseBackoffMs = Math.Max(1, _eventBusOptions.RetryBackoffMs);
+                int delayMs = (int)Math.Min(15_000, baseBackoffMs * Math.Pow(2, retries - 1));
+                await Task.Delay(delayMs, cancellationToken);
+            }
+        }
+    }
+
+    private async Task TryPublishDlqAsync(
+        string failedTopic,
+        string eventType,
+        InboundEnvelope envelope,
+        Exception exception,
+        int retryCount,
+        CancellationToken cancellationToken)
+    {
+        string escapedTopic = Uri.EscapeDataString(failedTopic);
+        string dlqTopic = $"v1/dlq/{escapedTopic}";
+        var dlq = new DlqEnvelopeV1(
+            "1.0",
+            Guid.NewGuid(),
+            failedTopic,
+            eventType,
+            envelope.Message.Imei,
+            envelope.SessionId,
+            envelope.PacketId,
+            exception.GetType().Name,
+            exception.Message,
+            DateTimeOffset.UtcNow,
+            retryCount);
+
+        try
+        {
+            await _eventBus.PublishAsync(dlqTopic, dlq, cancellationToken);
+            _tcpMetrics.RecordEventDlq(
+                envelope.Port,
+                envelope.Message.Protocol,
+                eventType);
+        }
+        catch (Exception dlqEx)
+        {
+            _logger.LogError(
+                dlqEx,
+                "event_dlq_publish_failed sessionId={sessionId} packetId={packetId} topic={topic}",
+                envelope.SessionId,
+                envelope.PacketId,
+                dlqTopic);
+        }
+    }
+
+    private static bool TryBuildStatusEvent(
+        InboundEnvelope envelope,
+        string imei,
+        out DeviceStatusEventV1? statusEvent)
+    {
+        statusEvent = envelope.Message.MessageType switch
+        {
+            MessageType.Login => new DeviceStatusEventV1(
+                "1.0",
+                Guid.NewGuid(),
+                envelope.Message.ReceivedAtUtc,
+                imei,
+                DeviceStatusKind.Online,
+                envelope.Message.Protocol,
+                envelope.Message.MessageType,
+                envelope.SessionId,
+                envelope.PacketId,
+                envelope.RemoteIp,
+                envelope.Port,
+                "login"),
+            MessageType.Heartbeat => new DeviceStatusEventV1(
+                "1.0",
+                Guid.NewGuid(),
+                envelope.Message.ReceivedAtUtc,
+                imei,
+                DeviceStatusKind.Heartbeat,
+                envelope.Message.Protocol,
+                envelope.Message.MessageType,
+                envelope.SessionId,
+                envelope.PacketId,
+                envelope.RemoteIp,
+                envelope.Port,
+                "heartbeat"),
+            _ => null
+        };
+
+        return statusEvent is not null;
+    }
 }
-
-

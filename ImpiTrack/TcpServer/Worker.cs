@@ -15,6 +15,7 @@ using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
 using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
+using TcpServer.RawQueue;
 
 namespace TcpServer;
 
@@ -29,6 +30,7 @@ public sealed class Worker : BackgroundService
     private readonly IReadOnlyDictionary<ProtocolId, IProtocolParser> _parsers;
     private readonly IReadOnlyDictionary<ProtocolId, IAckStrategy> _ackStrategies;
     private readonly IInboundQueue _inboundQueue;
+    private readonly IRawPacketQueue _rawPacketQueue;
     private readonly ISessionManager _sessionManager;
     private readonly IPacketIdGenerator _packetIdGenerator;
     private readonly IIngestionRepository _ingestionRepository;
@@ -56,6 +58,7 @@ public sealed class Worker : BackgroundService
         IEnumerable<IProtocolParser> parsers,
         IEnumerable<IAckStrategy> ackStrategies,
         IInboundQueue inboundQueue,
+        IRawPacketQueue rawPacketQueue,
         ISessionManager sessionManager,
         IPacketIdGenerator packetIdGenerator,
         IIngestionRepository ingestionRepository,
@@ -68,6 +71,7 @@ public sealed class Worker : BackgroundService
         _parsers = parsers.ToDictionary(x => x.Protocol);
         _ackStrategies = ackStrategies.ToDictionary(x => x.Protocol);
         _inboundQueue = inboundQueue;
+        _rawPacketQueue = rawPacketQueue;
         _sessionManager = sessionManager;
         _packetIdGenerator = packetIdGenerator;
         _ingestionRepository = ingestionRepository;
@@ -157,6 +161,7 @@ public sealed class Worker : BackgroundService
                 client.NoDelay = true;
                 using NetworkStream stream = client.GetStream();
                 PipeReader reader = PipeReader.Create(stream);
+                bool disconnectRequested = false;
 
                 while (!serverToken.IsCancellationRequested)
                 {
@@ -233,7 +238,7 @@ public sealed class Worker : BackgroundService
                         if (!_parsers.TryGetValue(protocol, out IProtocolParser? parser))
                         {
                             RegisterInvalidFrame(remoteIp, endpoint.Port, protocol, session.SessionId);
-                            await TryAddRawPacketAsync(
+                            bool rawQueuedNoParser = await TryAddRawPacketAsync(
                                 new RawPacketRecord(
                                     session.SessionId,
                                     packetId,
@@ -253,6 +258,11 @@ public sealed class Worker : BackgroundService
                                 _inboundQueue.Backlog,
                                 "parse_no_parser",
                                 serverToken);
+                            if (!rawQueuedNoParser && _rawPacketQueue.FullMode == RawQueueFullMode.Disconnect)
+                            {
+                                disconnectRequested = true;
+                                break;
+                            }
 
                             _logger.LogWarning(
                                 "parse_skip_no_parser sessionId={sessionId} packetId={packetId} protocol={protocol} port={port}",
@@ -266,7 +276,7 @@ public sealed class Worker : BackgroundService
                         if (!parser.TryParse(frame, out ParsedMessage? parsed, out string? parseError) || parsed is null)
                         {
                             RegisterInvalidFrame(remoteIp, endpoint.Port, protocol, session.SessionId);
-                            await TryAddRawPacketAsync(
+                            bool rawQueuedParseFail = await TryAddRawPacketAsync(
                                 new RawPacketRecord(
                                     session.SessionId,
                                     packetId,
@@ -286,6 +296,11 @@ public sealed class Worker : BackgroundService
                                 _inboundQueue.Backlog,
                                 "parse_fail",
                                 serverToken);
+                            if (!rawQueuedParseFail && _rawPacketQueue.FullMode == RawQueueFullMode.Disconnect)
+                            {
+                                disconnectRequested = true;
+                                break;
+                            }
 
                             _logger.LogWarning(
                                 "parse_fail sessionId={sessionId} packetId={packetId} protocol={protocol} port={port} error={error}",
@@ -333,7 +348,7 @@ public sealed class Worker : BackgroundService
                                 ackLatencyMs);
                         }
 
-                        await TryAddRawPacketAsync(
+                        bool rawQueuedParseOk = await TryAddRawPacketAsync(
                             new RawPacketRecord(
                                 session.SessionId,
                                 packetId,
@@ -353,6 +368,11 @@ public sealed class Worker : BackgroundService
                             _inboundQueue.Backlog,
                             "parse_ok",
                             serverToken);
+                        if (!rawQueuedParseOk && _rawPacketQueue.FullMode == RawQueueFullMode.Disconnect)
+                        {
+                            disconnectRequested = true;
+                            break;
+                        }
 
                         await _inboundQueue.EnqueueAsync(
                             new InboundEnvelope(
@@ -383,6 +403,18 @@ public sealed class Worker : BackgroundService
                                 "session_progress_snapshot",
                                 serverToken);
                         }
+                    }
+
+                    if (disconnectRequested)
+                    {
+                        closeReason = "raw_queue_overflow_disconnect";
+                        _sessionManager.SetCloseReason(session.SessionId, closeReason);
+                        _logger.LogWarning(
+                            "session_disconnect_raw_queue_overflow sessionId={sessionId} remoteIp={remoteIp} port={port}",
+                            session.SessionId,
+                            remoteIp,
+                            endpoint.Port);
+                        break;
                     }
 
                     if (!firstFrameReceived &&
@@ -573,7 +605,7 @@ public sealed class Worker : BackgroundService
             isActive);
     }
 
-    private async Task TryAddRawPacketAsync(
+    private async Task<bool> TryAddRawPacketAsync(
         RawPacketRecord record,
         long backlog,
         string reason,
@@ -581,16 +613,33 @@ public sealed class Worker : BackgroundService
     {
         try
         {
-            await _ingestionRepository.AddRawPacketAsync(record, backlog, cancellationToken);
+            bool accepted = await _rawPacketQueue.EnqueueAsync(
+                new RawPacketEnvelope(record, backlog, DateTimeOffset.UtcNow),
+                cancellationToken);
+            if (!accepted)
+            {
+                _tcpMetrics.RecordRawQueueDrop(record.Port, record.Protocol);
+                _logger.LogWarning(
+                    "raw_queue_drop sessionId={sessionId} packetId={packetId} reason={reason} mode={mode}",
+                    record.SessionId,
+                    record.PacketId,
+                    reason,
+                    _rawPacketQueue.FullMode);
+                return false;
+            }
+
+            _tcpMetrics.RecordRawQueueBacklog(record.Port, record.Protocol, _rawPacketQueue.Backlog);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(
                 ex,
-                "persist_raw_failed sessionId={sessionId} packetId={packetId} reason={reason}",
+                "raw_queue_enqueue_failed sessionId={sessionId} packetId={packetId} reason={reason}",
                 record.SessionId,
                 record.PacketId,
                 reason);
+            return false;
         }
     }
 

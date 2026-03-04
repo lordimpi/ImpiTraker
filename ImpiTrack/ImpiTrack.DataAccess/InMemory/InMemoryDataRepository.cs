@@ -43,10 +43,11 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
-    public Task PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
+    public Task<PersistEnvelopeResult> PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.CompletedTask;
+        _ = envelope;
+        return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
     }
 
     /// <inheritdoc />

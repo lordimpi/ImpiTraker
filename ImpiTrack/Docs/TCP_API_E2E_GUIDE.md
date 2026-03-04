@@ -79,6 +79,13 @@ Claves que controlan el switch:
 - `IdentityStorage:Provider` (`SqlServer` o `InMemory`) en API
 - `ConnectionStrings:SqlServer` / `ConnectionStrings:Postgres`
 - `ConnectionStrings:IdentitySqlServer` / `ConnectionStrings:IdentityPostgres`
+- `EventBus:Provider` (`InMemory` o `Emqx` placeholder)
+- `EventBus:Host` / `EventBus:Port` / `EventBus:ClientId`
+- `EventBus:*QoS` (`TelemetryQoS`, `StatusQoS`, `DlqQoS`)
+- `EventBus:MaxPublishRetries` / `EventBus:RetryBackoffMs` / `EventBus:EnableDlq`
+- `TcpServerConfig:Pipeline:RawChannelCapacity`
+- `TcpServerConfig:Pipeline:RawConsumerWorkers`
+- `TcpServerConfig:Pipeline:RawFullMode` (`Wait`, `Drop`, `Disconnect`)
 
 Ejemplo SQL Server:
 - `Database:Provider = SqlServer`
@@ -117,6 +124,18 @@ Notas del script:
 - `/ready` responde `200` con storage disponible.
 - Ingesta persiste `raw_packets` y telemetria en `positions` cuando aplica.
 - Ops expone correlacion por `sessionId` y `packetId`.
+- Dedupe de tracking activo por `positions.dedupe_key` (sin duplicados por replay).
+
+## 10) EMQX local (bus interno)
+
+Configura en `TcpServer/appsettings.Development.json`:
+- `EventBus:Provider = Emqx`
+- `EventBus:Host = 127.0.0.1`
+- `EventBus:Port = 1883`
+
+Comportamiento esperado:
+- Publica `v1/telemetry/{imei}` y `v1/status/{imei}`.
+- Si falla la publicacion y se agotan reintentos, envia `v1/dlq/{topic}` cuando `EnableDlq=true`.
 
 Estado actual recomendado para cierre:
 - Fase 3: cerrada con SQL Server.

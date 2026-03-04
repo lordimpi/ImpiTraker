@@ -4,6 +4,33 @@ using ImpiTrack.Tcp.Core.Queue;
 namespace ImpiTrack.DataAccess.Abstractions;
 
 /// <summary>
+/// Resultado de persistencia de un envelope downstream.
+/// </summary>
+public enum PersistEnvelopeStatus
+{
+    /// <summary>
+    /// El envelope se persistio correctamente.
+    /// </summary>
+    Persisted = 1,
+
+    /// <summary>
+    /// El envelope fue identificado como duplicado y no genero nueva escritura.
+    /// </summary>
+    Deduplicated = 2,
+
+    /// <summary>
+    /// El envelope se omite porque no hay dispositivo vinculado para el IMEI.
+    /// </summary>
+    SkippedUnownedDevice = 3
+}
+
+/// <summary>
+/// Valor de retorno de persistencia para telemetria/eventos normalizados.
+/// </summary>
+/// <param name="Status">Estado final de persistencia aplicado.</param>
+public readonly record struct PersistEnvelopeResult(PersistEnvelopeStatus Status);
+
+/// <summary>
 /// Operaciones de escritura de ingesta para sesiones, paquetes y datos normalizados.
 /// </summary>
 public interface IIngestionRepository
@@ -28,5 +55,6 @@ public interface IIngestionRepository
     /// </summary>
     /// <param name="envelope">Envelope parseado consumido de la cola.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
-    Task PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken);
+    /// <returns>Resultado de persistencia para telemetria/evento deduplicado.</returns>
+    Task<PersistEnvelopeResult> PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken);
 }

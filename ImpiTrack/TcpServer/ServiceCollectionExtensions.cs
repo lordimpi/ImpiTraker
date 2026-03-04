@@ -6,10 +6,13 @@ using ImpiTrack.Protocols.Coban;
 using ImpiTrack.Observability;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.Correlation;
+using ImpiTrack.Tcp.Core.EventBus;
 using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
 using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
+using TcpServer.EventBus;
+using TcpServer.RawQueue;
 
 namespace TcpServer;
 
@@ -38,6 +41,29 @@ public static class ServiceCollectionExtensions
             .Validate(
                 static options => options.Servers.Count > 0,
                 "TcpServerConfig:Servers debe contener al menos un endpoint.");
+        services
+            .BindOptions<EventBusOptions>(
+                configuration,
+                EventBusOptions.SectionName,
+                validateDataAnnotations: false,
+                validateOnStart: true)
+            .Validate(
+                static options =>
+                    string.Equals(options.Provider, "InMemory", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(options.Provider, "Emqx", StringComparison.OrdinalIgnoreCase),
+                "EventBus:Provider debe ser InMemory o Emqx.")
+            .Validate(
+                static options => options.Port is > 0 and <= 65535,
+                "EventBus:Port debe estar entre 1 y 65535.")
+            .Validate(
+                static options =>
+                    options.TelemetryQoS is >= 0 and <= 2 &&
+                    options.StatusQoS is >= 0 and <= 2 &&
+                    options.DlqQoS is >= 0 and <= 2,
+                "EventBus:*QoS debe estar entre 0 y 2.")
+            .Validate(
+                static options => options.MaxPublishRetries >= 0 && options.RetryBackoffMs > 0,
+                "EventBus:MaxPublishRetries debe ser >= 0 y RetryBackoffMs > 0.");
 
         services.AddImpiTrackDataAccess(configuration);
 
@@ -61,6 +87,23 @@ public static class ServiceCollectionExtensions
             TcpServerOptions options = sp.GetRequiredService<IGenericOptionsService<TcpServerOptions>>().GetOptions();
             return new InMemoryInboundQueue(options.Pipeline.ChannelCapacity);
         });
+        services.AddSingleton<IRawPacketQueue>(sp =>
+        {
+            TcpServerOptions options = sp.GetRequiredService<IGenericOptionsService<TcpServerOptions>>().GetOptions();
+            RawQueueFullMode fullMode = RawQueueFullModeParser.Parse(options.Pipeline.RawFullMode);
+            return new InMemoryRawPacketQueue(options.Pipeline.RawChannelCapacity, fullMode);
+        });
+
+        services.AddSingleton<IEventBus>(sp =>
+        {
+            EventBusOptions eventBusOptions = sp.GetRequiredService<IGenericOptionsService<EventBusOptions>>().GetOptions();
+            if (string.Equals(eventBusOptions.Provider, "Emqx", StringComparison.OrdinalIgnoreCase))
+            {
+                return ActivatorUtilities.CreateInstance<EmqxMqttEventBus>(sp);
+            }
+
+            return new InMemoryEventBus();
+        });
 
         services.AddSingleton<IProtocolParser, CobanProtocolParser>();
         services.AddSingleton<IProtocolParser, CantrackProtocolParser>();
@@ -69,6 +112,7 @@ public static class ServiceCollectionExtensions
 
         services.AddHostedService<Worker>();
         services.AddHostedService<InboundProcessingService>();
+        services.AddHostedService<RawPacketProcessingService>();
         return services;
     }
 }
