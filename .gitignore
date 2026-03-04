@@ -11,6 +11,8 @@
 *.sln.docstates
 *.env
 /Documents
+.artifacts/
+.dotnet/
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 

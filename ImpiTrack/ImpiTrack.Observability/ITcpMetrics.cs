@@ -48,4 +48,75 @@ public interface ITcpMetrics
     /// <param name="protocol">Protocolo del mensaje.</param>
     /// <param name="latencyMs">Latencia de envio del ACK en milisegundos.</param>
     void RecordAck(int port, ProtocolId protocol, double latencyMs);
+
+    /// <summary>
+    /// Registra una muestra de backlog actual de la cola de ingestiones.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado al mensaje.</param>
+    /// <param name="backlog">Cantidad de elementos pendientes en cola.</param>
+    void RecordQueueBacklog(int port, ProtocolId protocol, long backlog);
+
+    /// <summary>
+    /// Registra latencia de persistencia downstream por mensaje.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo del mensaje.</param>
+    /// <param name="latencyMs">Latencia de persistencia en milisegundos.</param>
+    void RecordPersistLatency(int port, ProtocolId protocol, double latencyMs);
+
+    /// <summary>
+    /// Registra backlog de la cola raw diferida.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado.</param>
+    /// <param name="backlog">Backlog actual en cola raw.</param>
+    void RecordRawQueueBacklog(int port, ProtocolId protocol, long backlog);
+
+    /// <summary>
+    /// Registra descarte de paquete raw por overflow de cola.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado.</param>
+    void RecordRawQueueDrop(int port, ProtocolId protocol);
+
+    /// <summary>
+    /// Registra que un mensaje de tracking fue deduplicado en persistencia.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado.</param>
+    void RecordDedupeDrop(int port, ProtocolId protocol);
+
+    /// <summary>
+    /// Registra fallo de publicacion de evento hacia el bus interno.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado.</param>
+    /// <param name="eventType">Tipo de evento que fallo.</param>
+    void RecordEventPublishFailure(int port, ProtocolId protocol, string eventType);
+
+    /// <summary>
+    /// Registra publicacion exitosa de evento hacia el bus interno.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado.</param>
+    /// <param name="eventType">Tipo logico del evento publicado.</param>
+    /// <param name="latencyMs">Latencia de publicacion en milisegundos.</param>
+    void RecordEventPublishSuccess(int port, ProtocolId protocol, string eventType, double latencyMs);
+
+    /// <summary>
+    /// Registra un reintento de publicacion al bus interno.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado.</param>
+    /// <param name="eventType">Tipo de evento reintentado.</param>
+    void RecordEventPublishRetry(int port, ProtocolId protocol, string eventType);
+
+    /// <summary>
+    /// Registra envio exitoso a dead-letter queue.
+    /// </summary>
+    /// <param name="port">Puerto del listener.</param>
+    /// <param name="protocol">Protocolo asociado.</param>
+    /// <param name="eventType">Tipo de evento enviado a DLQ.</param>
+    void RecordEventDlq(int port, ProtocolId protocol, string eventType);
 }

@@ -44,6 +44,12 @@ public sealed class CobanProtocolTests
         Assert.NotNull(message);
         Assert.Equal(MessageType.Tracking, message!.MessageType);
         Assert.Equal("864035051929066", message.Imei);
+        Assert.NotNull(message.GpsTimeUtc);
+        Assert.Equal(new DateTimeOffset(2025, 2, 8, 12, 58, 16, TimeSpan.Zero), message.GpsTimeUtc!.Value);
+        Assert.NotNull(message.Latitude);
+        Assert.NotNull(message.Longitude);
+        Assert.Equal(2.480175d, message.Latitude!.Value, 6);
+        Assert.Equal(-76.566907d, message.Longitude!.Value, 6);
         Assert.True(ackOk);
         Assert.Equal("ON\r\n", Encoding.ASCII.GetString(ackBytes.Span));
     }

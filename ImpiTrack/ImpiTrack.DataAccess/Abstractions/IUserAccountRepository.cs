@@ -1,0 +1,89 @@
+namespace ImpiTrack.DataAccess.Abstractions;
+
+/// <summary>
+/// Operaciones de cuenta de usuario, plan y vinculacion de GPS.
+/// </summary>
+public interface IUserAccountRepository
+{
+    /// <summary>
+    /// Crea perfil y plan por defecto para un usuario cuando no existen.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="email">Correo principal del usuario.</param>
+    /// <param name="fullName">Nombre visible opcional.</param>
+    /// <param name="nowUtc">Fecha UTC de provisionamiento.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    Task EnsureUserProvisioningAsync(
+        Guid userId,
+        string email,
+        string? fullName,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene resumen de cuenta para el usuario indicado.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Resumen de cuenta o <c>null</c> si no existe provisionamiento.</returns>
+    Task<UserAccountSummary?> GetUserSummaryAsync(Guid userId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene los GPS vinculados a un usuario.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Lista de vinculos activos.</returns>
+    Task<IReadOnlyList<UserDeviceBinding>> GetUserDevicesAsync(Guid userId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Vincula un IMEI a la cuenta del usuario validando cuota y ownership.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="imei">IMEI a vincular.</param>
+    /// <param name="nowUtc">Fecha UTC de operacion.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Estado de la vinculacion.</returns>
+    Task<BindDeviceResult> BindDeviceAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Desvincula un IMEI de la cuenta del usuario.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="imei">IMEI a desvincular.</param>
+    /// <param name="nowUtc">Fecha UTC de operacion.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns><c>true</c> si se desactivo el vinculo.</returns>
+    Task<bool> UnbindDeviceAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lista usuarios para operacion administrativa.
+    /// </summary>
+    /// <param name="limit">Cantidad maxima de resultados.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Vista resumida de usuarios.</returns>
+    Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Asigna un plan activo a un usuario finalizando el anterior.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="planCode">Codigo de plan a activar.</param>
+    /// <param name="nowUtc">Fecha UTC de operacion.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns><c>true</c> si se aplico correctamente.</returns>
+    Task<bool> SetUserPlanAsync(
+        Guid userId,
+        string planCode,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken);
+}
+

@@ -25,6 +25,7 @@
     <ProjectReference Include="..\ImpiTrack.Protocols.Coban\ImpiTrack.Protocols.Coban.csproj" />
     <ProjectReference Include="..\ImpiTrack.Protocols.Cantrack\ImpiTrack.Protocols.Cantrack.csproj" />
     <ProjectReference Include="..\ImpiTrack.Ops\ImpiTrack.Ops.csproj" />
+    <ProjectReference Include="..\ImpiTrack.DataAccess\ImpiTrack.DataAccess.csproj" />
     <ProjectReference Include="..\ImpiTrack.Api\ImpiTrack.Api.csproj" />
     <ProjectReference Include="..\TcpServer\TcpServer.csproj" />
   </ItemGroup>
