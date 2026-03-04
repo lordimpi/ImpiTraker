@@ -137,10 +137,22 @@ Comportamiento esperado:
 - Publica `v1/telemetry/{imei}` y `v1/status/{imei}`.
 - Si falla la publicacion y se agotan reintentos, envia `v1/dlq/{topic}` cuando `EnableDlq=true`.
 
+Smoke automatizado recomendado:
+
+```powershell
+.\ImpiTrack\Tools\Run-EmqxSmoke.ps1
+```
+
+El script valida:
+- publicacion en `v1/telemetry/+`
+- publicacion en `v1/status/+`
+- ruta DLQ en `v1/dlq/#` usando fallo simulado por configuracion
+- logs de evidencia en `ImpiTrack/.artifacts/smoke-emqx-worker*.log`
+
 Estado actual recomendado para cierre:
 - Fase 3: cerrada con SQL Server.
 - Fase 4: cerrada para capa de negocio multi-proveedor (SqlServer/Postgres).
-- Identity en Postgres: diferido en net10 estable (usar `IdentityStorage:Provider=InMemory` o `SqlServer`).
+- Identity en Postgres: habilitado para bootstrap en Development usando `EnsureCreated`.
 
 ## 9) Troubleshooting de proveedores
 
@@ -150,6 +162,6 @@ Estado actual recomendado para cierre:
   habilita TCP/IP en SQL Server Configuration Manager y revisa firewall/regla del puerto 1433.
 - PostgreSQL `28P01 password authentication failed`:
   corrige `Username/Password` o crea el usuario/DB objetivo antes del smoke.
-- PostgreSQL en Identity (`MissingMethodException`):
-  en net10 estable, configura `IdentityStorage:Provider=InMemory` o `SqlServer`.
-  Si pones `Postgres`, la API ahora falla al inicio con error explicito.
+- PostgreSQL en Identity (schema inicial no creado):
+  valida `IdentityStorage:Provider=Postgres`, cadena de conexion y ejecuta la API en `Development`
+  para que `EnsureCreated` cree tablas base de Identity.

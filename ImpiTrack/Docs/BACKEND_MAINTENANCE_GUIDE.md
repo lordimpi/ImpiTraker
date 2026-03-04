@@ -260,6 +260,20 @@ dotnet run --project ImpiTrack/TcpServer/TcpServer.csproj
 .\ImpiTrack\Tools\Run-ProviderSmoke.ps1 -Provider SqlServer
 ```
 
+### 9.5 Smoke EMQX automatizado
+```powershell
+.\ImpiTrack\Tools\Run-EmqxSmoke.ps1
+```
+
+### 9.6 Levantar stack de observabilidad local
+```powershell
+docker compose -f .\ImpiTrack\Observability\docker-compose.observability.yml up -d
+```
+
+Credenciales Grafana por defecto:
+- user: `admin`
+- password: `admin`
+
 ## 10. Observabilidad y diagnostico
 
 ### 10.1 Logs relevantes
@@ -354,10 +368,12 @@ dotnet run --project ImpiTrack/TcpServer/TcpServer.csproj
 - Si se usa EMQX, validar publish y DLQ.
 
 ## 14. Deuda tecnica conocida y siguiente paso recomendado
-- Identity en Postgres diferido. Negocio multi-db ya esta listo a nivel DataAccess.
-- `TcpPipelineOptions.ParserWorkers` y `DbWorkers` existen en config pero hoy no gobiernan workers reales (se usan `ConsumerWorkers` y `RawConsumerWorkers`).
+- Migracion final de claves deprecadas:
+  - `ParserWorkers` y `DbWorkers` siguen soportadas temporalmente con warning.
+  - retiro planificado en la siguiente version mayor.
+- En Identity PostgreSQL se usa `EnsureCreated` para bootstrap inicial en Development.
+  - siguiente paso: definir estrategia de migraciones provider-specific para Identity.
 - Siguiente iteracion recomendada:
-  1. consolidar smoke automatizado para EMQX,
-  2. habilitar Identity Postgres cuando el stack EF/Npgsql en .NET 10 quede estable,
-  3. agregar dashboards de metricas (OpenTelemetry collector + backend de metricas).
-
+  1. agregar smoke CI para `Run-EmqxSmoke.ps1`,
+  2. endurecer dashboards (SLO por puerto/protocolo y alertas),
+  3. formalizar rollout de Identity Postgres en entornos no-dev.

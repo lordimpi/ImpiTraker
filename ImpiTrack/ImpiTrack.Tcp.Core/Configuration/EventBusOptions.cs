@@ -74,4 +74,19 @@ public sealed class EventBusOptions
     /// Habilita publicacion de eventos en DLQ cuando se agotan reintentos.
     /// </summary>
     public bool EnableDlq { get; set; } = true;
+
+    /// <summary>
+    /// Habilita simulacion controlada de fallo de publicacion para smoke tests operativos.
+    /// </summary>
+    public bool EnablePublishFailureSimulation { get; set; }
+
+    /// <summary>
+    /// Tipo de evento donde se fuerza el fallo simulado. Valores esperados: telemetry_v1 o status_v1.
+    /// </summary>
+    public string? SimulateFailureEventType { get; set; }
+
+    /// <summary>
+    /// Indica si el fallo simulado debe ocurrir solo una vez por tipo de evento.
+    /// </summary>
+    public bool SimulateFailureOnce { get; set; } = true;
 }

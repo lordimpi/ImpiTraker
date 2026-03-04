@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.IOptionPattern;
 using ImpiTrack.Observability;
@@ -6,6 +7,7 @@ using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.EventBus;
 using ImpiTrack.Tcp.Core.Queue;
+using TcpServer.Configuration;
 
 namespace TcpServer;
 
@@ -21,6 +23,7 @@ public sealed class InboundProcessingService : BackgroundService
     private readonly IEventBus _eventBus;
     private readonly EventBusOptions _eventBusOptions;
     private readonly int _workerCount;
+    private readonly ConcurrentDictionary<string, byte> _simulatedFailureOnceTracker = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Crea un servicio consumidor de cola usando la concurrencia de workers configurada.
@@ -32,6 +35,7 @@ public sealed class InboundProcessingService : BackgroundService
     /// <param name="eventBus">Bus de eventos interno para contratos canonicos.</param>
     /// <param name="optionsService">Opciones del servidor.</param>
     /// <param name="eventBusOptionsService">Opciones del bus de eventos.</param>
+    /// <param name="configuration">Configuracion raiz para detectar claves deprecadas.</param>
     public InboundProcessingService(
         ILogger<InboundProcessingService> logger,
         IInboundQueue inboundQueue,
@@ -39,14 +43,43 @@ public sealed class InboundProcessingService : BackgroundService
         ITcpMetrics tcpMetrics,
         IEventBus eventBus,
         IGenericOptionsService<TcpServerOptions> optionsService,
-        IGenericOptionsService<EventBusOptions> eventBusOptionsService)
+        IGenericOptionsService<EventBusOptions> eventBusOptionsService,
+        IConfiguration configuration)
     {
         _logger = logger;
         _inboundQueue = inboundQueue;
         _ingestionRepository = ingestionRepository;
         _tcpMetrics = tcpMetrics;
         _eventBus = eventBus;
-        _workerCount = Math.Max(1, optionsService.GetOptions().Pipeline.ConsumerWorkers);
+        TcpServerOptions tcpOptions = optionsService.GetOptions();
+        IConfigurationSection pipelineSection = configuration.GetSection($"{TcpServerOptions.SectionName}:Pipeline");
+        bool hasConsumerWorkersKey = !string.IsNullOrWhiteSpace(pipelineSection[nameof(TcpPipelineOptions.ConsumerWorkers)]);
+        bool hasParserWorkersKey = !string.IsNullOrWhiteSpace(pipelineSection[nameof(TcpPipelineOptions.ParserWorkers)]);
+        bool hasDbWorkersKey = !string.IsNullOrWhiteSpace(pipelineSection[nameof(TcpPipelineOptions.DbWorkers)]);
+        ConsumerWorkerResolution resolution = ConsumerWorkerResolver.Resolve(
+            tcpOptions.Pipeline,
+            hasConsumerWorkersKey,
+            hasParserWorkersKey,
+            hasDbWorkersKey);
+        _workerCount = resolution.WorkerCount;
+
+        if (resolution.HasDeprecatedKeys)
+        {
+            _logger.LogWarning(
+                "config_deprecated_keys_detected keys={keys} replacement={replacement}",
+                $"{nameof(TcpPipelineOptions.ParserWorkers)},{nameof(TcpPipelineOptions.DbWorkers)}",
+                nameof(TcpPipelineOptions.ConsumerWorkers));
+        }
+
+        if (resolution.UsedDeprecatedFallback)
+        {
+            _logger.LogWarning(
+                "config_deprecated_fallback_applied resolvedFrom={resolvedFrom} replacement={replacement} effectiveValue={effectiveValue}",
+                resolution.ResolvedFrom,
+                nameof(TcpPipelineOptions.ConsumerWorkers),
+                resolution.WorkerCount);
+        }
+
         _eventBusOptions = eventBusOptionsService.GetOptions();
     }
 
@@ -182,6 +215,12 @@ public sealed class InboundProcessingService : BackgroundService
             Stopwatch stopwatch = Stopwatch.StartNew();
             try
             {
+                if (ShouldSimulatePublishFailure(eventType))
+                {
+                    throw new InvalidOperationException(
+                        $"event_publish_simulated_failure eventType={eventType}");
+                }
+
                 await _eventBus.PublishAsync(topic, payload, cancellationToken);
                 stopwatch.Stop();
                 _tcpMetrics.RecordEventPublishSuccess(
@@ -234,6 +273,27 @@ public sealed class InboundProcessingService : BackgroundService
                 await Task.Delay(delayMs, cancellationToken);
             }
         }
+    }
+
+    private bool ShouldSimulatePublishFailure(string eventType)
+    {
+        if (!_eventBusOptions.EnablePublishFailureSimulation)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_eventBusOptions.SimulateFailureEventType) ||
+            !string.Equals(_eventBusOptions.SimulateFailureEventType, eventType, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (_eventBusOptions.SimulateFailureOnce)
+        {
+            return _simulatedFailureOnceTracker.TryAdd(eventType, 1);
+        }
+
+        return true;
     }
 
     private async Task TryPublishDlqAsync(

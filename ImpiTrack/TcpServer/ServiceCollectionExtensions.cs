@@ -63,7 +63,14 @@ public static class ServiceCollectionExtensions
                 "EventBus:*QoS debe estar entre 0 y 2.")
             .Validate(
                 static options => options.MaxPublishRetries >= 0 && options.RetryBackoffMs > 0,
-                "EventBus:MaxPublishRetries debe ser >= 0 y RetryBackoffMs > 0.");
+                "EventBus:MaxPublishRetries debe ser >= 0 y RetryBackoffMs > 0.")
+            .Validate(
+                static options =>
+                    !options.EnablePublishFailureSimulation ||
+                    string.IsNullOrWhiteSpace(options.SimulateFailureEventType) ||
+                    string.Equals(options.SimulateFailureEventType, "telemetry_v1", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(options.SimulateFailureEventType, "status_v1", StringComparison.OrdinalIgnoreCase),
+                "EventBus:SimulateFailureEventType debe ser telemetry_v1 o status_v1 cuando la simulacion esta habilitada.");
 
         services.AddImpiTrackDataAccess(configuration);
 

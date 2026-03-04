@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ImpiTrack.Ops;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -308,6 +309,7 @@ public sealed class ApiRegistrationAndAccountTests
 
             builder.ConfigureServices(services =>
             {
+                services.AddDataProtection().UseEphemeralDataProtectionProvider();
                 services.RemoveAll<IOpsDataStore>();
                 services.AddSingleton<IOpsDataStore, InMemoryOpsDataStore>();
             });
