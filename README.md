@@ -11,6 +11,21 @@
 
 ---
 
+## Estado actual del backend (v1 estable)
+
+El backend de esta fase se considera **cerrado y estable** para alcance MVP:
+
+- Ingesta TCP robusta (Coban + Cantrack) con framing para concatenados/incompletos.
+- ACK rapido/correcto por protocolo y control de abuso por IP.
+- Backpressure con colas bounded (`InboundQueue` + `RawPacketQueue`).
+- Persistencia operativa y de negocio en SQL Server (con base preparada para Postgres en DataAccess).
+- API con Auth, gestion de dispositivos por usuario/plan y endpoints Ops para observabilidad.
+- Event bus interno con `InMemory` y soporte `EMQX` por configuracion.
+
+Documentacion recomendada para mantenimiento:
+- `ImpiTrack/Docs/BACKEND_MAINTENANCE_GUIDE.md` (guia completa operativa y tecnica).
+- `ImpiTrack/Docs/TCP_API_E2E_GUIDE.md` (paso a paso de pruebas E2E).
+
 ## 0. Tabla de contenidos
 
 1. [Visión y objetivos](#1-visión-y-objetivos)  
