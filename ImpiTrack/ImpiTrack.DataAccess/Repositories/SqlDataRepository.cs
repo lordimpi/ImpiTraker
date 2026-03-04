@@ -1607,50 +1607,86 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         {
             DatabaseProvider.SqlServer =>
                 """
-                IF EXISTS (SELECT 1 FROM raw_packets WHERE packet_id = @PacketId)
+                UPDATE raw_packets
+                SET session_id = @SessionId,
+                    device_id = COALESCE(@DeviceId, device_id),
+                    imei = COALESCE(@Imei, imei),
+                    port = @Port,
+                    remote_ip = @RemoteIp,
+                    protocol = @Protocol,
+                    message_type = @MessageType,
+                    payload_text = CASE WHEN LEN(@PayloadText) > 0 THEN @PayloadText ELSE payload_text END,
+                    received_at_utc = CASE
+                        WHEN @ReceivedAtUtc < received_at_utc THEN @ReceivedAtUtc
+                        ELSE received_at_utc
+                    END,
+                    parse_status = @ParseStatus,
+                    parse_error = COALESCE(@ParseError, parse_error),
+                    ack_sent = CASE
+                        WHEN @AckSent = 1 OR ack_sent = 1 THEN 1
+                        ELSE 0
+                    END,
+                    ack_payload = COALESCE(@AckPayload, ack_payload),
+                    ack_at_utc = COALESCE(@AckAtUtc, ack_at_utc),
+                    ack_latency_ms = COALESCE(@AckLatencyMs, ack_latency_ms),
+                    queue_backlog = CASE
+                        WHEN @QueueBacklog > 0 THEN @QueueBacklog
+                        ELSE queue_backlog
+                    END
+                WHERE packet_id = @PacketId;
+
+                IF @@ROWCOUNT = 0
                 BEGIN
-                    UPDATE raw_packets
-                    SET session_id = @SessionId,
-                        device_id = COALESCE(@DeviceId, device_id),
-                        imei = COALESCE(@Imei, imei),
-                        port = @Port,
-                        remote_ip = @RemoteIp,
-                        protocol = @Protocol,
-                        message_type = @MessageType,
-                        payload_text = CASE WHEN LEN(@PayloadText) > 0 THEN @PayloadText ELSE payload_text END,
-                        received_at_utc = CASE
-                            WHEN @ReceivedAtUtc < received_at_utc THEN @ReceivedAtUtc
-                            ELSE received_at_utc
-                        END,
-                        parse_status = @ParseStatus,
-                        parse_error = COALESCE(@ParseError, parse_error),
-                        ack_sent = CASE
-                            WHEN @AckSent = 1 OR ack_sent = 1 THEN 1
-                            ELSE 0
-                        END,
-                        ack_payload = COALESCE(@AckPayload, ack_payload),
-                        ack_at_utc = COALESCE(@AckAtUtc, ack_at_utc),
-                        ack_latency_ms = COALESCE(@AckLatencyMs, ack_latency_ms),
-                        queue_backlog = CASE
-                            WHEN @QueueBacklog > 0 THEN @QueueBacklog
-                            ELSE queue_backlog
+                    BEGIN TRY
+                        INSERT INTO raw_packets
+                        (
+                            packet_id, session_id, device_id, imei, port, remote_ip, protocol, message_type,
+                            payload_text, received_at_utc, parse_status, parse_error,
+                            ack_sent, ack_payload, ack_at_utc, ack_latency_ms, queue_backlog
+                        )
+                        VALUES
+                        (
+                            @PacketId, @SessionId, @DeviceId, @Imei, @Port, @RemoteIp, @Protocol, @MessageType,
+                            @PayloadText, @ReceivedAtUtc, @ParseStatus, @ParseError,
+                            @AckSent, @AckPayload, @AckAtUtc, @AckLatencyMs, @QueueBacklog
+                        );
+                    END TRY
+                    BEGIN CATCH
+                        IF ERROR_NUMBER() IN (2601, 2627)
+                        BEGIN
+                            UPDATE raw_packets
+                            SET session_id = @SessionId,
+                                device_id = COALESCE(@DeviceId, device_id),
+                                imei = COALESCE(@Imei, imei),
+                                port = @Port,
+                                remote_ip = @RemoteIp,
+                                protocol = @Protocol,
+                                message_type = @MessageType,
+                                payload_text = CASE WHEN LEN(@PayloadText) > 0 THEN @PayloadText ELSE payload_text END,
+                                received_at_utc = CASE
+                                    WHEN @ReceivedAtUtc < received_at_utc THEN @ReceivedAtUtc
+                                    ELSE received_at_utc
+                                END,
+                                parse_status = @ParseStatus,
+                                parse_error = COALESCE(@ParseError, parse_error),
+                                ack_sent = CASE
+                                    WHEN @AckSent = 1 OR ack_sent = 1 THEN 1
+                                    ELSE 0
+                                END,
+                                ack_payload = COALESCE(@AckPayload, ack_payload),
+                                ack_at_utc = COALESCE(@AckAtUtc, ack_at_utc),
+                                ack_latency_ms = COALESCE(@AckLatencyMs, ack_latency_ms),
+                                queue_backlog = CASE
+                                    WHEN @QueueBacklog > 0 THEN @QueueBacklog
+                                    ELSE queue_backlog
+                                END
+                            WHERE packet_id = @PacketId;
                         END
-                    WHERE packet_id = @PacketId;
-                END
-                ELSE
-                BEGIN
-                    INSERT INTO raw_packets
-                    (
-                        packet_id, session_id, device_id, imei, port, remote_ip, protocol, message_type,
-                        payload_text, received_at_utc, parse_status, parse_error,
-                        ack_sent, ack_payload, ack_at_utc, ack_latency_ms, queue_backlog
-                    )
-                    VALUES
-                    (
-                        @PacketId, @SessionId, @DeviceId, @Imei, @Port, @RemoteIp, @Protocol, @MessageType,
-                        @PayloadText, @ReceivedAtUtc, @ParseStatus, @ParseError,
-                        @AckSent, @AckPayload, @AckAtUtc, @AckLatencyMs, @QueueBacklog
-                    );
+                        ELSE
+                        BEGIN
+                            THROW;
+                        END
+                    END CATCH
                 END;
                 """,
             DatabaseProvider.Postgres =>
