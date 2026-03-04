@@ -11,6 +11,7 @@ using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
 using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
+using Microsoft.Extensions.Options;
 using TcpServer.EventBus;
 using TcpServer.RawQueue;
 
@@ -31,6 +32,8 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        EnsureNoDeprecatedPipelineKeys(configuration);
+
         services.AddImpiTrackOptionsCore();
         services
             .BindOptions<TcpServerOptions>(
@@ -40,7 +43,10 @@ public static class ServiceCollectionExtensions
                 validateOnStart: true)
             .Validate(
                 static options => options.Servers.Count > 0,
-                "TcpServerConfig:Servers debe contener al menos un endpoint.");
+                "TcpServerConfig:Servers debe contener al menos un endpoint.")
+            .Validate(
+                static options => options.Pipeline.ConsumerWorkers >= 1,
+                "TcpServerConfig:Pipeline:ConsumerWorkers debe ser >= 1.");
         services
             .BindOptions<EventBusOptions>(
                 configuration,
@@ -121,6 +127,39 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<InboundProcessingService>();
         services.AddHostedService<RawPacketProcessingService>();
         return services;
+    }
+
+    /// <summary>
+    /// Valida que no se usen claves de configuracion retiradas en el pipeline TCP.
+    /// </summary>
+    /// <param name="configuration">Configuracion raiz de la aplicacion.</param>
+    /// <exception cref="OptionsValidationException">Se lanza cuando se detectan claves deprecadas.</exception>
+    internal static void EnsureNoDeprecatedPipelineKeys(IConfiguration configuration)
+    {
+        IConfigurationSection pipelineSection = configuration.GetSection($"{TcpServerOptions.SectionName}:Pipeline");
+        List<string> deprecatedKeys = [];
+
+        if (!string.IsNullOrWhiteSpace(pipelineSection["ParserWorkers"]))
+        {
+            deprecatedKeys.Add("ParserWorkers");
+        }
+
+        if (!string.IsNullOrWhiteSpace(pipelineSection["DbWorkers"]))
+        {
+            deprecatedKeys.Add("DbWorkers");
+        }
+
+        if (deprecatedKeys.Count == 0)
+        {
+            return;
+        }
+
+        throw new OptionsValidationException(
+            nameof(TcpServerOptions),
+            typeof(TcpServerOptions),
+            [
+                $"TcpServerConfig:Pipeline contiene claves retiradas ({string.Join(", ", deprecatedKeys)}). Usa solo ConsumerWorkers."
+            ]);
     }
 }
 

@@ -1,0 +1,75 @@
+groups:
+  - name: impitrack-tcp-slo
+    rules:
+      - alert: ImpiTrackParseFailRatioHigh
+        expr: |
+          (
+            sum(rate(tcp_parse_fail_total[10m])) by (port, protocol)
+            /
+            clamp_min(
+              sum(rate(tcp_parse_ok_total[10m])) by (port, protocol)
+              +
+              sum(rate(tcp_parse_fail_total[10m])) by (port, protocol),
+              0.001
+            )
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: impitrack-tcp
+        annotations:
+          summary: "Parse fail ratio alto (port={{ $labels.port }}, protocol={{ $labels.protocol }})"
+          description: "El ratio de parse_fail supera 5% durante 10m."
+
+      - alert: ImpiTrackAckP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(tcp_ack_latency_ms_bucket[5m])) by (le, port, protocol)
+          ) > 200
+        for: 10m
+        labels:
+          severity: warning
+          service: impitrack-tcp
+        annotations:
+          summary: "ACK p95 alto (port={{ $labels.port }}, protocol={{ $labels.protocol }})"
+          description: "ACK p95 supera 200ms durante 10m."
+
+      - alert: ImpiTrackPersistP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(tcp_persist_latency_ms_bucket[5m])) by (le, port, protocol)
+          ) > 300
+        for: 10m
+        labels:
+          severity: warning
+          service: impitrack-tcp
+        annotations:
+          summary: "Persist p95 alto (port={{ $labels.port }}, protocol={{ $labels.protocol }})"
+          description: "Persist p95 supera 300ms durante 10m."
+
+      - alert: ImpiTrackInboundBacklogHigh
+        expr: |
+          (
+            sum(rate(tcp_queue_backlog_sum[5m])) by (port, protocol)
+            /
+            clamp_min(sum(rate(tcp_queue_backlog_count[5m])) by (port, protocol), 1)
+          ) > 5000
+        for: 10m
+        labels:
+          severity: warning
+          service: impitrack-tcp
+        annotations:
+          summary: "Backlog inbound alto (port={{ $labels.port }}, protocol={{ $labels.protocol }})"
+          description: "Backlog promedio inbound supera 5000 durante 10m."
+
+      - alert: ImpiTrackRawQueueDropsDetected
+        expr: increase(tcp_raw_queue_drops_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: impitrack-tcp
+        annotations:
+          summary: "Se detectaron drops en raw queue"
+          description: "tcp_raw_queue_drops_total incrementó en los ultimos 5 minutos."

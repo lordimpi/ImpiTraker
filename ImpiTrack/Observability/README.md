@@ -40,11 +40,24 @@ Grafana carga automaticamente:
 
 Paneles incluidos:
 - conexiones activas
-- parse fail ratio
-- ack latency p95
-- backlog inbound/raw
-- persist latency p95
-- publish fail/retry/dlq
+- parse fail ratio por protocolo/puerto
+- ack latency p95 por protocolo/puerto
+- backlog inbound/raw por protocolo/puerto
+- persist latency p95 por protocolo/puerto
+- publish fail/retry/dlq por protocolo/puerto
+- raw queue drops (5m)
+- event publish latency p95
+
+## Alertas SLO
+Prometheus carga reglas desde:
+- `ImpiTrack/Observability/prometheus-rules.yml`
+
+Alertas activas:
+- `ImpiTrackParseFailRatioHigh`
+- `ImpiTrackAckP95High`
+- `ImpiTrackPersistP95High`
+- `ImpiTrackInboundBacklogHigh`
+- `ImpiTrackRawQueueDropsDetected`
 
 ## Apagado
 ```powershell

@@ -310,6 +310,15 @@ Credenciales Grafana por defecto:
 - persistencia: `tcp_persist_latency_ms`, `tcp_dedupe_drops_total`
 - bus interno: `tcp_event_publish_ok_total`, `tcp_event_publish_fail_total`, `tcp_event_publish_retry_total`, `tcp_event_dlq_total`
 
+### 10.3 Reglas de alerta SLO
+- Archivo: `ImpiTrack/Observability/prometheus-rules.yml`
+- Alertas incluidas:
+  - `ImpiTrackParseFailRatioHigh`
+  - `ImpiTrackAckP95High`
+  - `ImpiTrackPersistP95High`
+  - `ImpiTrackInboundBacklogHigh`
+  - `ImpiTrackRawQueueDropsDetected`
+
 ## 11. Troubleshooting (casos reales)
 
 ### Error: `Invalid object name 'IdentityRoles'`
@@ -384,12 +393,12 @@ Credenciales Grafana por defecto:
 - Si se usa EMQX, validar publish y DLQ.
 
 ## 14. Deuda tecnica conocida y siguiente paso recomendado
-- Migracion final de claves deprecadas:
-  - `ParserWorkers` y `DbWorkers` siguen soportadas temporalmente con warning.
-  - retiro planificado para `v3.0.0` (breaking change de configuracion).
+- Claves deprecadas en pipeline TCP:
+  - `ParserWorkers` y `DbWorkers` fueron retiradas.
+  - solo `ConsumerWorkers` es valida para workers inbound.
 - En Identity PostgreSQL se usa `EnsureCreated` para bootstrap inicial en Development.
   - estrategia formal en ADR: `Docs/ADR-001-IDENTITY-POSTGRES-ENABLEMENT.md`.
 - Siguiente iteracion recomendada:
-  1. retirar claves deprecadas en `v3.0.0`,
-  2. endurecer dashboards (SLO por puerto/protocolo y alertas),
+  1. ajustar umbrales SLO segun trafico real por entorno,
+  2. agregar destino de notificaciones (PagerDuty/Teams/Slack) para alertas criticas,
   3. ejecutar plan de habilitacion de Identity Postgres segun ADR.

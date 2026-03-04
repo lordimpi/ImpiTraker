@@ -7,7 +7,6 @@ using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.EventBus;
 using ImpiTrack.Tcp.Core.Queue;
-using TcpServer.Configuration;
 
 namespace TcpServer;
 
@@ -35,7 +34,6 @@ public sealed class InboundProcessingService : BackgroundService
     /// <param name="eventBus">Bus de eventos interno para contratos canonicos.</param>
     /// <param name="optionsService">Opciones del servidor.</param>
     /// <param name="eventBusOptionsService">Opciones del bus de eventos.</param>
-    /// <param name="configuration">Configuracion raiz para detectar claves deprecadas.</param>
     public InboundProcessingService(
         ILogger<InboundProcessingService> logger,
         IInboundQueue inboundQueue,
@@ -43,8 +41,7 @@ public sealed class InboundProcessingService : BackgroundService
         ITcpMetrics tcpMetrics,
         IEventBus eventBus,
         IGenericOptionsService<TcpServerOptions> optionsService,
-        IGenericOptionsService<EventBusOptions> eventBusOptionsService,
-        IConfiguration configuration)
+        IGenericOptionsService<EventBusOptions> eventBusOptionsService)
     {
         _logger = logger;
         _inboundQueue = inboundQueue;
@@ -52,33 +49,7 @@ public sealed class InboundProcessingService : BackgroundService
         _tcpMetrics = tcpMetrics;
         _eventBus = eventBus;
         TcpServerOptions tcpOptions = optionsService.GetOptions();
-        IConfigurationSection pipelineSection = configuration.GetSection($"{TcpServerOptions.SectionName}:Pipeline");
-        bool hasConsumerWorkersKey = !string.IsNullOrWhiteSpace(pipelineSection[nameof(TcpPipelineOptions.ConsumerWorkers)]);
-        bool hasParserWorkersKey = !string.IsNullOrWhiteSpace(pipelineSection[nameof(TcpPipelineOptions.ParserWorkers)]);
-        bool hasDbWorkersKey = !string.IsNullOrWhiteSpace(pipelineSection[nameof(TcpPipelineOptions.DbWorkers)]);
-        ConsumerWorkerResolution resolution = ConsumerWorkerResolver.Resolve(
-            tcpOptions.Pipeline,
-            hasConsumerWorkersKey,
-            hasParserWorkersKey,
-            hasDbWorkersKey);
-        _workerCount = resolution.WorkerCount;
-
-        if (resolution.HasDeprecatedKeys)
-        {
-            _logger.LogWarning(
-                "config_deprecated_keys_detected keys={keys} replacement={replacement}",
-                $"{nameof(TcpPipelineOptions.ParserWorkers)},{nameof(TcpPipelineOptions.DbWorkers)}",
-                nameof(TcpPipelineOptions.ConsumerWorkers));
-        }
-
-        if (resolution.UsedDeprecatedFallback)
-        {
-            _logger.LogWarning(
-                "config_deprecated_fallback_applied resolvedFrom={resolvedFrom} replacement={replacement} effectiveValue={effectiveValue}",
-                resolution.ResolvedFrom,
-                nameof(TcpPipelineOptions.ConsumerWorkers),
-                resolution.WorkerCount);
-        }
+        _workerCount = Math.Max(1, tcpOptions.Pipeline.ConsumerWorkers);
 
         _eventBusOptions = eventBusOptionsService.GetOptions();
     }

@@ -83,6 +83,7 @@ Claves que controlan el switch:
 - `EventBus:Host` / `EventBus:Port` / `EventBus:ClientId`
 - `EventBus:*QoS` (`TelemetryQoS`, `StatusQoS`, `DlqQoS`)
 - `EventBus:MaxPublishRetries` / `EventBus:RetryBackoffMs` / `EventBus:EnableDlq`
+- `TcpServerConfig:Pipeline:ConsumerWorkers`
 - `TcpServerConfig:Pipeline:RawChannelCapacity`
 - `TcpServerConfig:Pipeline:RawConsumerWorkers`
 - `TcpServerConfig:Pipeline:RawFullMode` (`Wait`, `Drop`, `Disconnect`)
@@ -159,7 +160,7 @@ El script valida:
 Estado actual recomendado para cierre:
 - Fase 3: cerrada con SQL Server.
 - Fase 4: cerrada para capa de negocio multi-proveedor (SqlServer/Postgres).
-- Identity en Postgres: habilitado para bootstrap en Development usando `EnsureCreated`.
+- Identity en Postgres: diferido hasta version estable compatible con .NET 10 (ver ADR-001).
 
 ## 11) Smoke en CI (GitHub + Azure DevOps)
 
@@ -172,6 +173,7 @@ Cobertura de ambos:
 - smoke SQL Server con `Run-ProviderSmoke.ps1 -Provider SqlServer`
 - smoke EMQX con `Run-EmqxSmoke.ps1`
 - publicacion de artefactos `.artifacts/*.log`
+- validacion de alertas SLO (reglas Prometheus cargadas).
 
 ## 9) Troubleshooting de proveedores
 
