@@ -10,7 +10,17 @@ param(
     [string]$PostgresConnectionString = "Host=localhost;Port=5432;Database=imptrack;Username=postgres;Password=postgres",
 
     [Parameter(Mandatory = $false)]
-    [int]$StartupTimeoutSeconds = 60
+    [int]$StartupTimeoutSeconds = 60,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Debug",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$BuildBeforeRun,
+
+    [Parameter(Mandatory = $false)]
+    [int]$FailureLogTailLines = 120
 )
 
 Set-StrictMode -Version Latest
@@ -18,6 +28,14 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $apiProject = Join-Path $repoRoot "ImpiTrack.Api/ImpiTrack.Api.csproj"
+
+if ($BuildBeforeRun.IsPresent) {
+    Write-Host "===> Build API ($Configuration)"
+    dotnet build $apiProject -c $Configuration
+    if ($LASTEXITCODE -ne 0) {
+        throw "smoke_build_failed project=$apiProject"
+    }
+}
 
 function Set-EnvValue {
     param(
@@ -137,6 +155,14 @@ function Invoke-Smoke {
         }
 
         Write-Host "[FAIL] /ready timeout. Revisa logs: $stdOutLogPath | $stdErrLogPath"
+        if (Test-Path $stdOutLogPath) {
+            Write-Host "--- stdout tail ---"
+            Get-Content $stdOutLogPath -Tail $FailureLogTailLines | Out-Host
+        }
+        if (Test-Path $stdErrLogPath) {
+            Write-Host "--- stderr tail ---"
+            Get-Content $stdErrLogPath -Tail $FailureLogTailLines | Out-Host
+        }
         return @{
             Provider = $DbProvider
             Success = $false

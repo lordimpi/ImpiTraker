@@ -258,12 +258,25 @@ dotnet run --project ImpiTrack/TcpServer/TcpServer.csproj
 ### 9.4 Prueba de proveedor SQL (API readiness)
 ```powershell
 .\ImpiTrack\Tools\Run-ProviderSmoke.ps1 -Provider SqlServer
+# CI/no binarios previos
+.\ImpiTrack\Tools\Run-ProviderSmoke.ps1 -Provider SqlServer -BuildBeforeRun
 ```
 
 ### 9.5 Smoke EMQX automatizado
 ```powershell
 .\ImpiTrack\Tools\Run-EmqxSmoke.ps1
+# CI/no binarios previos
+.\ImpiTrack\Tools\Run-EmqxSmoke.ps1 -NoBuild -StartupTimeoutSeconds 120 -TopicTimeoutSeconds 30
 ```
+
+### 9.7 Smoke CI (GitHub + Azure DevOps)
+- GitHub Actions: `.github/workflows/backend-smoke.yml`
+- Azure DevOps: `azure-pipelines.yml`
+- Ambos pipelines ejecutan:
+  - `dotnet restore/build/test`
+  - `Run-ProviderSmoke.ps1 -Provider SqlServer`
+  - `Run-EmqxSmoke.ps1`
+  - publicacion de logs de `.artifacts/*`
 
 ### 9.6 Levantar stack de observabilidad local
 ```powershell
@@ -356,6 +369,9 @@ Credenciales Grafana por defecto:
 
 ## 13. Checklist de release backend
 - `dotnet build` y `dotnet test` en verde.
+- Pipelines CI en verde:
+  - GitHub Actions `backend-smoke`
+  - Azure DevOps `azure-pipelines`
 - `Database:Provider` correcto para entorno.
 - Migraciones aplicadas sin pendientes.
 - `/health` y `/ready` responden OK.
@@ -370,10 +386,10 @@ Credenciales Grafana por defecto:
 ## 14. Deuda tecnica conocida y siguiente paso recomendado
 - Migracion final de claves deprecadas:
   - `ParserWorkers` y `DbWorkers` siguen soportadas temporalmente con warning.
-  - retiro planificado en la siguiente version mayor.
+  - retiro planificado para `v3.0.0` (breaking change de configuracion).
 - En Identity PostgreSQL se usa `EnsureCreated` para bootstrap inicial en Development.
-  - siguiente paso: definir estrategia de migraciones provider-specific para Identity.
+  - estrategia formal en ADR: `Docs/ADR-001-IDENTITY-POSTGRES-ENABLEMENT.md`.
 - Siguiente iteracion recomendada:
-  1. agregar smoke CI para `Run-EmqxSmoke.ps1`,
+  1. retirar claves deprecadas en `v3.0.0`,
   2. endurecer dashboards (SLO por puerto/protocolo y alertas),
-  3. formalizar rollout de Identity Postgres en entornos no-dev.
+  3. ejecutar plan de habilitacion de Identity Postgres segun ADR.

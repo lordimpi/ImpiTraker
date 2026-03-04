@@ -116,6 +116,7 @@ Notas del script:
 - Fuerza `IdentityStorage:Provider=InMemory` para aislar la prueba de negocio/API del provider de Identity.
 - Fuerza `Database:EnableAutoMigrate=true`.
 - Valida `/ready` y deja logs en `ImpiTrack/.artifacts/smoke-*.out.log` y `ImpiTrack/.artifacts/smoke-*.err.log`.
+- Soporta `-BuildBeforeRun` para escenarios CI sin binarios previos.
 
 ## 8) Criterio de cierre Fase 3/4
 
@@ -143,6 +144,12 @@ Smoke automatizado recomendado:
 .\ImpiTrack\Tools\Run-EmqxSmoke.ps1
 ```
 
+Ejemplo CI (sin recompilar dentro del smoke):
+
+```powershell
+.\ImpiTrack\Tools\Run-EmqxSmoke.ps1 -NoBuild -StartupTimeoutSeconds 120 -TopicTimeoutSeconds 30
+```
+
 El script valida:
 - publicacion en `v1/telemetry/+`
 - publicacion en `v1/status/+`
@@ -153,6 +160,18 @@ Estado actual recomendado para cierre:
 - Fase 3: cerrada con SQL Server.
 - Fase 4: cerrada para capa de negocio multi-proveedor (SqlServer/Postgres).
 - Identity en Postgres: habilitado para bootstrap en Development usando `EnsureCreated`.
+
+## 11) Smoke en CI (GitHub + Azure DevOps)
+
+Rutas:
+- GitHub Actions: `.github/workflows/backend-smoke.yml`
+- Azure DevOps: `azure-pipelines.yml`
+
+Cobertura de ambos:
+- `dotnet restore/build/test`
+- smoke SQL Server con `Run-ProviderSmoke.ps1 -Provider SqlServer`
+- smoke EMQX con `Run-EmqxSmoke.ps1`
+- publicacion de artefactos `.artifacts/*.log`
 
 ## 9) Troubleshooting de proveedores
 
