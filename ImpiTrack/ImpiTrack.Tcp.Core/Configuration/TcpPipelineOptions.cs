@@ -24,4 +24,19 @@ public sealed class TcpPipelineOptions
     /// Numero de workers en segundo plano que consumen envelopes en cola.
     /// </summary>
     public int ConsumerWorkers { get; set; } = 2;
+
+    /// <summary>
+    /// Capacidad del canal acotado para persistencia de paquetes raw.
+    /// </summary>
+    public int RawChannelCapacity { get; set; } = 20_000;
+
+    /// <summary>
+    /// Numero de workers en segundo plano que consumen paquetes raw.
+    /// </summary>
+    public int RawConsumerWorkers { get; set; } = 2;
+
+    /// <summary>
+    /// Politica al llegar a capacidad maxima de la cola raw. Valores: Wait, Drop, Disconnect.
+    /// </summary>
+    public string RawFullMode { get; set; } = "Wait";
 }

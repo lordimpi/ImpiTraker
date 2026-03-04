@@ -1,4 +1,7 @@
 using System.Data;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Dapper;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.Configuration;
@@ -6,6 +9,8 @@ using ImpiTrack.DataAccess.Connection;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Queue;
+using Microsoft.Data.SqlClient;
+using Npgsql;
 
 namespace ImpiTrack.DataAccess.Repositories;
 
@@ -143,7 +148,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
-    public async Task PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
+    public async Task<PersistEnvelopeResult> PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
     {
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -159,13 +164,14 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
             if (deviceId is null)
             {
                 await transaction.CommitAsync(cancellationToken);
-                return;
+                return new PersistEnvelopeResult(PersistEnvelopeStatus.SkippedUnownedDevice);
             }
 
             if (envelope.Message.MessageType == MessageType.Tracking)
             {
+                string dedupeKey = BuildTrackingDedupeKey(envelope);
                 CommandDefinition insertPosition = new(
-                    GetInsertPositionSql(),
+                    GetInsertPositionSql(_context.Provider),
                     new
                     {
                         PositionId = Guid.NewGuid(),
@@ -184,39 +190,51 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                             : Convert.ToDecimal(envelope.Message.Longitude.Value),
                         SpeedKmh = envelope.Message.SpeedKmh,
                         HeadingDeg = envelope.Message.HeadingDeg,
-                        CreatedAtUtc = DateTimeOffset.UtcNow
+                        CreatedAtUtc = DateTimeOffset.UtcNow,
+                        DedupeKey = dedupeKey
                     },
                     transaction,
                     _context.CommandTimeoutSeconds,
                     cancellationToken: cancellationToken);
 
-                await connection.ExecuteAsync(insertPosition);
-            }
-            else
-            {
-                CommandDefinition insertEvent = new(
-                    GetInsertEventSql(),
-                    new
-                    {
-                        EventId = Guid.NewGuid(),
-                        PacketId = envelope.PacketId.Value,
-                        SessionId = envelope.SessionId.Value,
-                        DeviceId = deviceId,
-                        Imei = envelope.Message.Imei,
-                        Protocol = (int)envelope.Message.Protocol,
-                        MessageType = (int)envelope.Message.MessageType,
-                        EventCode = envelope.Message.MessageType.ToString(),
-                        PayloadText = envelope.Message.Text,
-                        ReceivedAtUtc = envelope.Message.ReceivedAtUtc
-                    },
-                    transaction,
-                    _context.CommandTimeoutSeconds,
-                    cancellationToken: cancellationToken);
+                int inserted = await connection.ExecuteAsync(insertPosition);
+                await transaction.CommitAsync(cancellationToken);
+                if (inserted == 0)
+                {
+                    return new PersistEnvelopeResult(PersistEnvelopeStatus.Deduplicated);
+                }
 
-                await connection.ExecuteAsync(insertEvent);
+                return new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted);
             }
+
+            CommandDefinition insertEvent = new(
+                GetInsertEventSql(),
+                new
+                {
+                    EventId = Guid.NewGuid(),
+                    PacketId = envelope.PacketId.Value,
+                    SessionId = envelope.SessionId.Value,
+                    DeviceId = deviceId,
+                    Imei = envelope.Message.Imei,
+                    Protocol = (int)envelope.Message.Protocol,
+                    MessageType = (int)envelope.Message.MessageType,
+                    EventCode = envelope.Message.MessageType.ToString(),
+                    PayloadText = envelope.Message.Text,
+                    ReceivedAtUtc = envelope.Message.ReceivedAtUtc
+                },
+                transaction,
+                _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            await connection.ExecuteAsync(insertEvent);
 
             await transaction.CommitAsync(cancellationToken);
+            return new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted);
+        }
+        catch (Exception ex) when (IsDuplicateKey(ex))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new PersistEnvelopeResult(PersistEnvelopeStatus.Deduplicated);
         }
         catch
         {
@@ -717,21 +735,82 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         return "errorCode";
     }
 
-    private static string GetInsertPositionSql()
+    private static string BuildTrackingDedupeKey(InboundEnvelope envelope)
     {
-        return
-            """
-            INSERT INTO positions
-            (
-                position_id, packet_id, session_id, device_id, imei, protocol, message_type,
-                gps_time_utc, latitude, longitude, speed_kmh, heading_deg, created_at_utc
-            )
-            VALUES
-            (
-                @PositionId, @PacketId, @SessionId, @DeviceId, @Imei, @Protocol, @MessageType,
-                @GpsTimeUtc, @Latitude, @Longitude, @SpeedKmh, @HeadingDeg, @CreatedAtUtc
-            );
-            """;
+        string imei = envelope.Message.Imei?.Trim() ?? string.Empty;
+        string gpsTime = (envelope.Message.GpsTimeUtc ?? envelope.Message.ReceivedAtUtc)
+            .UtcDateTime
+            .ToString("O", CultureInfo.InvariantCulture);
+        string latitude = envelope.Message.Latitude?.ToString("F6", CultureInfo.InvariantCulture) ?? "na";
+        string longitude = envelope.Message.Longitude?.ToString("F6", CultureInfo.InvariantCulture) ?? "na";
+        string source = string.Join(
+            "|",
+            imei,
+            gpsTime,
+            envelope.Message.MessageType.ToString(),
+            latitude,
+            longitude);
+
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(source));
+        return Convert.ToHexString(hash);
+    }
+
+    private static bool IsDuplicateKey(Exception exception)
+    {
+        if (exception is SqlException sqlException)
+        {
+            return sqlException.Number is 2601 or 2627;
+        }
+
+        if (exception is PostgresException postgresException)
+        {
+            return string.Equals(postgresException.SqlState, "23505", StringComparison.Ordinal);
+        }
+
+        if (exception.InnerException is not null)
+        {
+            return IsDuplicateKey(exception.InnerException);
+        }
+
+        return false;
+    }
+
+    private static string GetInsertPositionSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                IF NOT EXISTS (SELECT 1 FROM positions WHERE dedupe_key = @DedupeKey)
+                BEGIN
+                    INSERT INTO positions
+                    (
+                        position_id, packet_id, session_id, device_id, imei, protocol, message_type,
+                        gps_time_utc, latitude, longitude, speed_kmh, heading_deg, created_at_utc, dedupe_key
+                    )
+                    VALUES
+                    (
+                        @PositionId, @PacketId, @SessionId, @DeviceId, @Imei, @Protocol, @MessageType,
+                        @GpsTimeUtc, @Latitude, @Longitude, @SpeedKmh, @HeadingDeg, @CreatedAtUtc, @DedupeKey
+                    );
+                END;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                INSERT INTO positions
+                (
+                    position_id, packet_id, session_id, device_id, imei, protocol, message_type,
+                    gps_time_utc, latitude, longitude, speed_kmh, heading_deg, created_at_utc, dedupe_key
+                )
+                VALUES
+                (
+                    @PositionId, @PacketId, @SessionId, @DeviceId, @Imei, @Protocol, @MessageType,
+                    @GpsTimeUtc, @Latitude, @Longitude, @SpeedKmh, @HeadingDeg, @CreatedAtUtc, @DedupeKey
+                )
+                ON CONFLICT (dedupe_key) DO NOTHING;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_insert")
+        };
     }
 
     private static string GetInsertEventSql()
