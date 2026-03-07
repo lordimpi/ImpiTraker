@@ -11,6 +11,13 @@
 
 ---
 
+## Enlaces rápidos
+
+- [Guía E2E API + TCP](ImpiTrack/Docs/TCP_API_E2E_GUIDE.md)
+- [Plan detallado de ejecución manual E2E](ImpiTrack/Docs/MANUAL_E2E_EXECUTION_PLAN.md)
+
+---
+
 ## Estado actual (Mar 2026)
 
 - Backend core operativo y estable en .NET 10.

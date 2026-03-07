@@ -2,6 +2,9 @@
 
 Esta guia valida backend local completo: auth, vinculacion de GPS, ingesta TCP y observabilidad Ops.
 
+Para una ejecucion manual paso a paso (con comandos copy/paste), usa tambien:
+- `ImpiTrack/Docs/MANUAL_E2E_EXECUTION_PLAN.md`
+
 ## 1) Prerrequisitos
 
 - .NET 10 instalado.
