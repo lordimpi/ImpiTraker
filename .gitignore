@@ -13,9 +13,9 @@
 /Documents
 .artifacts/
 .dotnet/
-/skills/playbook-backend/
-/AGENTS.md
-/AI_PLAYBOOK.md
+AGENTS.md
+AI_PLAYBOOK.md
+skills/playbook-backend/
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 

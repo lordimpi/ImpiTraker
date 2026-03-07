@@ -1,3 +1,5 @@
+using OpenTelemetry.Metrics;
+
 namespace TcpServer;
 
 /// <summary>
@@ -12,9 +14,36 @@ public class Program
     public static void Main(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(args);
+        ConfigureOpenTelemetry(builder);
         builder.Services.AddTcpServerServices(builder.Configuration);
 
         IHost host = builder.Build();
         host.Run();
+    }
+
+    private static void ConfigureOpenTelemetry(HostApplicationBuilder builder)
+    {
+        bool enabled = builder.Configuration.GetValue("OpenTelemetry:Enabled", false);
+        if (!enabled)
+        {
+            return;
+        }
+
+        string? endpoint = builder.Configuration["OpenTelemetry:OtlpEndpoint"];
+        builder.Services
+            .AddOpenTelemetry()
+            .WithMetrics(metrics =>
+            {
+                metrics
+                    .AddMeter("ImpiTrack.Tcp")
+                    .AddRuntimeInstrumentation()
+                    .AddOtlpExporter(options =>
+                    {
+                        if (!string.IsNullOrWhiteSpace(endpoint))
+                        {
+                            options.Endpoint = new Uri(endpoint);
+                        }
+                    });
+            });
     }
 }

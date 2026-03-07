@@ -18,11 +18,42 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using OpenTelemetry.Metrics;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+void ConfigureOpenTelemetry(WebApplicationBuilder appBuilder)
+{
+    bool enabled = appBuilder.Configuration.GetValue("OpenTelemetry:Enabled", false);
+    if (!enabled)
+    {
+        return;
+    }
+
+    string? endpoint = appBuilder.Configuration["OpenTelemetry:OtlpEndpoint"];
+    appBuilder.Services
+        .AddOpenTelemetry()
+        .WithMetrics(metrics =>
+        {
+            metrics
+                .AddAspNetCoreInstrumentation()
+                .AddHttpClientInstrumentation()
+                .AddRuntimeInstrumentation()
+                .AddMeter("ImpiTrack.Tcp")
+                .AddOtlpExporter(options =>
+                {
+                    if (!string.IsNullOrWhiteSpace(endpoint))
+                    {
+                        options.Endpoint = new Uri(endpoint);
+                    }
+                });
+        });
+}
+
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
+ConfigureOpenTelemetry(builder);
 if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
 {
     builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
@@ -73,20 +104,20 @@ string? identityConnection = ProviderConnectionStringResolver.ResolveIdentityCon
     identityStorage.ConnectionString);
 
 bool useIdentitySqlServer = identityProvider == DatabaseProvider.SqlServer;
+bool useIdentityPostgres = identityProvider == DatabaseProvider.Postgres;
 string identityInMemoryDatabaseName = builder.Environment.IsEnvironment("Testing")
     ? $"ImpiTrack.Identity.{Guid.NewGuid():N}"
     : "ImpiTrack.Identity";
 
-if (identityProvider == DatabaseProvider.Postgres)
+if (!useIdentitySqlServer && !useIdentityPostgres)
 {
-    throw new InvalidOperationException(
-        "identity_provider_not_supported_for_net10 provider=Postgres action=use_inmemory_or_sqlserver");
+    builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
 }
 
-if (useIdentitySqlServer && string.IsNullOrWhiteSpace(identityConnection))
+if ((useIdentitySqlServer || useIdentityPostgres) && string.IsNullOrWhiteSpace(identityConnection))
 {
     throw new InvalidOperationException(
-        "identity_connection_string_missing provider=SqlServer keys=IdentityStorage:ConnectionString|ConnectionStrings:IdentitySqlServer|ConnectionStrings:SqlServer");
+        $"identity_connection_string_missing provider={identityProvider} keys=IdentityStorage:ConnectionString|ConnectionStrings:IdentitySqlServer|ConnectionStrings:IdentityPostgres|ConnectionStrings:SqlServer|ConnectionStrings:Postgres");
 }
 
 builder.Services.AddDbContext<IdentityAppDbContext>(options =>
@@ -96,6 +127,16 @@ builder.Services.AddDbContext<IdentityAppDbContext>(options =>
         options.UseSqlServer(identityConnection, sql =>
         {
             sql.CommandTimeout(Math.Max(1, database.CommandTimeoutSeconds));
+        });
+
+        return;
+    }
+
+    if (useIdentityPostgres)
+    {
+        options.UseNpgsql(identityConnection, npgsql =>
+        {
+            npgsql.CommandTimeout(Math.Max(1, database.CommandTimeoutSeconds));
         });
 
         return;
@@ -277,11 +318,18 @@ builder.Services.AddAuthorization(options =>
 
 WebApplication app = builder.Build();
 
-if (app.Environment.IsDevelopment() && useIdentitySqlServer)
+if (app.Environment.IsDevelopment() && (useIdentitySqlServer || useIdentityPostgres))
 {
     using IServiceScope migrationScope = app.Services.CreateScope();
     IdentityAppDbContext dbContext = migrationScope.ServiceProvider.GetRequiredService<IdentityAppDbContext>();
-    await dbContext.Database.MigrateAsync();
+    if (useIdentitySqlServer)
+    {
+        await dbContext.Database.MigrateAsync();
+    }
+    else
+    {
+        await dbContext.Database.EnsureCreatedAsync();
+    }
 }
 
 using (IServiceScope dataAccessMigrationScope = app.Services.CreateScope())

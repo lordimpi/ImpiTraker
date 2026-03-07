@@ -11,16 +11,6 @@ public sealed class TcpPipelineOptions
     public int ChannelCapacity { get; set; } = 20_000;
 
     /// <summary>
-    /// Numero de workers destinados al parseo de mensajes.
-    /// </summary>
-    public int ParserWorkers { get; set; } = 2;
-
-    /// <summary>
-    /// Numero de workers destinados a tareas downstream (persistencia/procesamiento).
-    /// </summary>
-    public int DbWorkers { get; set; } = 2;
-
-    /// <summary>
     /// Numero de workers en segundo plano que consumen envelopes en cola.
     /// </summary>
     public int ConsumerWorkers { get; set; } = 2;

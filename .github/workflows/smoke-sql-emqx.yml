@@ -1,0 +1,73 @@
+name: Smoke SQL + EMQX
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_sql_smoke:
+        description: "Run SQL Server provider smoke (requires SMOKE_SQLSERVER_CONNECTION_STRING secret)"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  emqx_smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start EMQX
+        run: |
+          docker run -d --name emqx-local -p 1883:1883 -p 18083:18083 emqx/emqx:latest
+          sleep 15
+          docker ps --filter "name=emqx-local"
+
+      - name: Install MQTT client
+        run: sudo apt-get update && sudo apt-get install -y mosquitto-clients
+
+      - name: Publish/Subscribe smoke
+        run: |
+          timeout 20s sh -c 'mosquitto_sub -h 127.0.0.1 -p 1883 -t "v1/telemetry/test" -C 1 > /tmp/mqtt_msg.txt & sleep 1; mosquitto_pub -h 127.0.0.1 -p 1883 -t "v1/telemetry/test" -m "smoke-ok"; wait'
+          grep -q "smoke-ok" /tmp/mqtt_msg.txt
+
+      - name: EMQX logs (on failure)
+        if: failure()
+        run: docker logs --tail 200 emqx-local
+
+      - name: Stop EMQX
+        if: always()
+        run: docker rm -f emqx-local
+
+  sqlserver_provider_smoke:
+    if: ${{ inputs.run_sql_smoke && secrets.SMOKE_SQLSERVER_CONNECTION_STRING != '' }}
+    runs-on: windows-latest
+    needs: emqx_smoke
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore ImpiTrack/ImpiTrack.sln
+
+      - name: Build
+        run: dotnet build ImpiTrack/ImpiTrack.sln -c Debug --no-restore
+
+      - name: Run SQL Server provider smoke
+        shell: pwsh
+        run: |
+          ./ImpiTrack/Tools/Run-ProviderSmoke.ps1 -Provider SqlServer -SqlServerConnectionString "${{ secrets.SMOKE_SQLSERVER_CONNECTION_STRING }}"
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-sqlserver-logs
+          path: ImpiTrack/.artifacts/smoke-*.log
+          if-no-files-found: ignore

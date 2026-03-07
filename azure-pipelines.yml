@@ -1,0 +1,130 @@
+trigger:
+  branches:
+    include:
+      - dev
+
+pr:
+  branches:
+    include:
+      - dev
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: BuildAndTest
+    displayName: Build & Test
+    jobs:
+      - job: build_test
+        steps:
+          - checkout: self
+
+          - task: UseDotNet@2
+            displayName: Setup .NET 10
+            inputs:
+              packageType: sdk
+              version: 10.0.x
+
+          - script: dotnet restore ImpiTrack/ImpiTrack.sln
+            displayName: Restore
+
+          - script: dotnet build ImpiTrack/ImpiTrack.sln -c Debug --no-restore
+            displayName: Build
+
+          - script: dotnet test ImpiTrack/ImpiTrack.sln -c Debug --no-build
+            displayName: Test
+
+  - stage: SmokeSqlServer
+    displayName: Smoke SQL Server
+    dependsOn: BuildAndTest
+    condition: succeeded()
+    jobs:
+      - job: smoke_sqlserver
+        steps:
+          - checkout: self
+
+          - task: UseDotNet@2
+            displayName: Setup .NET 10
+            inputs:
+              packageType: sdk
+              version: 10.0.x
+
+          - script: |
+              docker rm -f impitrack-sql-smoke || true
+              docker run -d \
+                --name impitrack-sql-smoke \
+                -e ACCEPT_EULA=Y \
+                -e MSSQL_SA_PASSWORD='Your_password123!' \
+                -p 1433:1433 \
+                mcr.microsoft.com/mssql/server:2022-latest
+            displayName: Start SQL Server container
+
+          - bash: |
+              for i in {1..60}; do
+                (echo > /dev/tcp/127.0.0.1/1433) >/dev/null 2>&1 && exit 0
+                sleep 2
+              done
+              echo "SQL Server did not open port 1433 in time"
+              exit 1
+            displayName: Wait SQL Server
+
+          - pwsh: |
+              ./ImpiTrack/Tools/Run-ProviderSmoke.ps1 `
+                -Provider SqlServer `
+                -SqlServerConnectionString "Server=127.0.0.1,1433;Initial Catalog=ImpiTrakDB;User ID=sa;Password=Your_password123!;Encrypt=False;TrustServerCertificate=True;Connect Timeout=30;" `
+                -StartupTimeoutSeconds 120 `
+                -BuildBeforeRun
+            displayName: Run SQL Server provider smoke
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish SQL smoke logs
+            condition: always()
+            inputs:
+              targetPath: ImpiTrack/.artifacts
+              artifact: smoke-sqlserver-logs
+
+          - script: docker rm -f impitrack-sql-smoke || true
+            displayName: Stop SQL Server container
+            condition: always()
+
+  - stage: SmokeEmqx
+    displayName: Smoke EMQX
+    dependsOn: BuildAndTest
+    condition: succeeded()
+    jobs:
+      - job: smoke_emqx
+        steps:
+          - checkout: self
+
+          - task: UseDotNet@2
+            displayName: Setup .NET 10
+            inputs:
+              packageType: sdk
+              version: 10.0.x
+
+          - script: |
+              docker rm -f emqx-local || true
+              docker run -d \
+                --name emqx-local \
+                -p 1883:1883 \
+                -p 18083:18083 \
+                emqx/emqx:latest
+            displayName: Start EMQX container
+
+          - pwsh: |
+              ./ImpiTrack/Tools/Run-EmqxSmoke.ps1 `
+                -StartupTimeoutSeconds 120 `
+                -TopicTimeoutSeconds 30
+            displayName: Run EMQX smoke
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish EMQX smoke logs
+            condition: always()
+            inputs:
+              targetPath: ImpiTrack/.artifacts
+              artifact: smoke-emqx-logs
+
+          - script: docker rm -f emqx-local || true
+            displayName: Stop EMQX container
+            condition: always()

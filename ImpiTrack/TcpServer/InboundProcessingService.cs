@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.IOptionPattern;
 using ImpiTrack.Observability;
@@ -21,6 +22,7 @@ public sealed class InboundProcessingService : BackgroundService
     private readonly IEventBus _eventBus;
     private readonly EventBusOptions _eventBusOptions;
     private readonly int _workerCount;
+    private readonly ConcurrentDictionary<string, byte> _simulatedFailureOnceTracker = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Crea un servicio consumidor de cola usando la concurrencia de workers configurada.
@@ -46,7 +48,9 @@ public sealed class InboundProcessingService : BackgroundService
         _ingestionRepository = ingestionRepository;
         _tcpMetrics = tcpMetrics;
         _eventBus = eventBus;
-        _workerCount = Math.Max(1, optionsService.GetOptions().Pipeline.ConsumerWorkers);
+        TcpServerOptions tcpOptions = optionsService.GetOptions();
+        _workerCount = Math.Max(1, tcpOptions.Pipeline.ConsumerWorkers);
+
         _eventBusOptions = eventBusOptionsService.GetOptions();
     }
 
@@ -182,6 +186,12 @@ public sealed class InboundProcessingService : BackgroundService
             Stopwatch stopwatch = Stopwatch.StartNew();
             try
             {
+                if (ShouldSimulatePublishFailure(eventType))
+                {
+                    throw new InvalidOperationException(
+                        $"event_publish_simulated_failure eventType={eventType}");
+                }
+
                 await _eventBus.PublishAsync(topic, payload, cancellationToken);
                 stopwatch.Stop();
                 _tcpMetrics.RecordEventPublishSuccess(
@@ -234,6 +244,27 @@ public sealed class InboundProcessingService : BackgroundService
                 await Task.Delay(delayMs, cancellationToken);
             }
         }
+    }
+
+    private bool ShouldSimulatePublishFailure(string eventType)
+    {
+        if (!_eventBusOptions.EnablePublishFailureSimulation)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_eventBusOptions.SimulateFailureEventType) ||
+            !string.Equals(_eventBusOptions.SimulateFailureEventType, eventType, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (_eventBusOptions.SimulateFailureOnce)
+        {
+            return _simulatedFailureOnceTracker.TryAdd(eventType, 1);
+        }
+
+        return true;
     }
 
     private async Task TryPublishDlqAsync(

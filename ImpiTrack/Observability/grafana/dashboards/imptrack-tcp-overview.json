@@ -1,0 +1,359 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Dashboard base de operacion para IMPITrack TCP",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(tcp_connections_active) by (port)",
+          "legendFormat": "port={{port}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Conexiones activas por puerto",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(tcp_parse_fail_total[5m])) by (port, protocol) / clamp_min(sum(rate(tcp_parse_ok_total[5m])) by (port, protocol) + sum(rate(tcp_parse_fail_total[5m])) by (port, protocol), 0.0001)",
+          "legendFormat": "{{protocol}}:{{port}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Parse fail ratio (5m) por protocolo/puerto",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(tcp_ack_latency_ms_bucket[5m])) by (le, port, protocol))",
+          "legendFormat": "{{protocol}}:{{port}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "ACK latency p95 (ms) por protocolo/puerto",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(tcp_queue_backlog_sum[5m])) by (port, protocol) / clamp_min(sum(rate(tcp_queue_backlog_count[5m])) by (port, protocol), 1)",
+          "legendFormat": "inbound {{protocol}}:{{port}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(tcp_raw_queue_backlog_sum[5m])) by (port, protocol) / clamp_min(sum(rate(tcp_raw_queue_backlog_count[5m])) by (port, protocol), 1)",
+          "legendFormat": "raw {{protocol}}:{{port}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Backlog promedio por protocolo/puerto",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(tcp_persist_latency_ms_bucket[5m])) by (le, port, protocol))",
+          "legendFormat": "{{protocol}}:{{port}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Persist latency p95 (ms) por protocolo/puerto",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(tcp_event_publish_fail_total[5m])) by (eventType, port, protocol)",
+          "legendFormat": "fail {{eventType}} {{protocol}}:{{port}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(tcp_event_publish_retry_total[5m])) by (eventType, port, protocol)",
+          "legendFormat": "retry {{eventType}} {{protocol}}:{{port}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(tcp_event_dlq_total[5m])) by (eventType, port, protocol)",
+          "legendFormat": "dlq {{eventType}} {{protocol}}:{{port}}",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Event bus failures/retries/DLQ por protocolo/puerto",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(increase(tcp_raw_queue_drops_total[5m])) by (port, protocol)",
+          "legendFormat": "{{protocol}}:{{port}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Raw queue drops (5m) por protocolo/puerto",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(tcp_event_publish_latency_ms_bucket[5m])) by (le, eventType, port, protocol))",
+          "legendFormat": "{{eventType}} {{protocol}}:{{port}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Event publish latency p95 (ms) por tipo/protocolo/puerto",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "imptrack",
+    "tcp",
+    "ops"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "IMPITrack TCP Overview",
+  "uid": "imptrack-tcp-overview",
+  "version": 2,
+  "weekStart": ""
+}

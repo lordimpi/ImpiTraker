@@ -11,20 +11,28 @@
 
 ---
 
-## Estado actual del backend (v1 estable)
+## Enlaces rápidos
 
-El backend de esta fase se considera **cerrado y estable** para alcance MVP:
+- [Guía E2E API + TCP](ImpiTrack/Docs/TCP_API_E2E_GUIDE.md)
+- [Plan detallado de ejecución manual E2E](ImpiTrack/Docs/MANUAL_E2E_EXECUTION_PLAN.md)
 
-- Ingesta TCP robusta (Coban + Cantrack) con framing para concatenados/incompletos.
-- ACK rapido/correcto por protocolo y control de abuso por IP.
-- Backpressure con colas bounded (`InboundQueue` + `RawPacketQueue`).
-- Persistencia operativa y de negocio en SQL Server (con base preparada para Postgres en DataAccess).
-- API con Auth, gestion de dispositivos por usuario/plan y endpoints Ops para observabilidad.
-- Event bus interno con `InMemory` y soporte `EMQX` por configuracion.
+---
 
-Documentacion recomendada para mantenimiento:
-- `ImpiTrack/Docs/BACKEND_MAINTENANCE_GUIDE.md` (guia completa operativa y tecnica).
-- `ImpiTrack/Docs/TCP_API_E2E_GUIDE.md` (paso a paso de pruebas E2E).
+## Estado actual (Mar 2026)
+
+- Backend core operativo y estable en .NET 10.
+- Fase 0, 1, 2, 3 y 4 del backend cerradas en alcance actual.
+- SQL Server validado para desarrollo local y smoke.
+- Event Bus interno disponible con `InMemory` y `EMQX`.
+- Observabilidad base disponible (logs estructurados + metricas + alertas iniciales).
+
+### Deuda abierta explicita
+
+1. Identity sobre PostgreSQL en .NET 10: diferido por estabilidad del stack EF/Npgsql/Identity.
+2. CI/CD formal en GitHub Actions para build/test/smoke automatico.
+3. Afinar dashboards/umbrales de alerta con trafico real de produccion.
+
+---
 
 ## 0. Tabla de contenidos
 

@@ -258,7 +258,34 @@ dotnet run --project ImpiTrack/TcpServer/TcpServer.csproj
 ### 9.4 Prueba de proveedor SQL (API readiness)
 ```powershell
 .\ImpiTrack\Tools\Run-ProviderSmoke.ps1 -Provider SqlServer
+# CI/no binarios previos
+.\ImpiTrack\Tools\Run-ProviderSmoke.ps1 -Provider SqlServer -BuildBeforeRun
 ```
+
+### 9.5 Smoke EMQX automatizado
+```powershell
+.\ImpiTrack\Tools\Run-EmqxSmoke.ps1
+# CI/no binarios previos
+.\ImpiTrack\Tools\Run-EmqxSmoke.ps1 -NoBuild -StartupTimeoutSeconds 120 -TopicTimeoutSeconds 30
+```
+
+### 9.7 Smoke CI (GitHub + Azure DevOps)
+- GitHub Actions: `.github/workflows/backend-smoke.yml`
+- Azure DevOps: `azure-pipelines.yml`
+- Ambos pipelines ejecutan:
+  - `dotnet restore/build/test`
+  - `Run-ProviderSmoke.ps1 -Provider SqlServer`
+  - `Run-EmqxSmoke.ps1`
+  - publicacion de logs de `.artifacts/*`
+
+### 9.6 Levantar stack de observabilidad local
+```powershell
+docker compose -f .\ImpiTrack\Observability\docker-compose.observability.yml up -d
+```
+
+Credenciales Grafana por defecto:
+- user: `admin`
+- password: `admin`
 
 ## 10. Observabilidad y diagnostico
 
@@ -282,6 +309,15 @@ dotnet run --project ImpiTrack/TcpServer/TcpServer.csproj
 - colas: `tcp_queue_backlog`, `tcp_raw_queue_backlog`, `tcp_raw_queue_drops_total`
 - persistencia: `tcp_persist_latency_ms`, `tcp_dedupe_drops_total`
 - bus interno: `tcp_event_publish_ok_total`, `tcp_event_publish_fail_total`, `tcp_event_publish_retry_total`, `tcp_event_dlq_total`
+
+### 10.3 Reglas de alerta SLO
+- Archivo: `ImpiTrack/Observability/prometheus-rules.yml`
+- Alertas incluidas:
+  - `ImpiTrackParseFailRatioHigh`
+  - `ImpiTrackAckP95High`
+  - `ImpiTrackPersistP95High`
+  - `ImpiTrackInboundBacklogHigh`
+  - `ImpiTrackRawQueueDropsDetected`
 
 ## 11. Troubleshooting (casos reales)
 
@@ -342,6 +378,9 @@ dotnet run --project ImpiTrack/TcpServer/TcpServer.csproj
 
 ## 13. Checklist de release backend
 - `dotnet build` y `dotnet test` en verde.
+- Pipelines CI en verde:
+  - GitHub Actions `backend-smoke`
+  - Azure DevOps `azure-pipelines`
 - `Database:Provider` correcto para entorno.
 - Migraciones aplicadas sin pendientes.
 - `/health` y `/ready` responden OK.
@@ -354,10 +393,12 @@ dotnet run --project ImpiTrack/TcpServer/TcpServer.csproj
 - Si se usa EMQX, validar publish y DLQ.
 
 ## 14. Deuda tecnica conocida y siguiente paso recomendado
-- Identity en Postgres diferido. Negocio multi-db ya esta listo a nivel DataAccess.
-- `TcpPipelineOptions.ParserWorkers` y `DbWorkers` existen en config pero hoy no gobiernan workers reales (se usan `ConsumerWorkers` y `RawConsumerWorkers`).
+- Claves deprecadas en pipeline TCP:
+  - `ParserWorkers` y `DbWorkers` fueron retiradas.
+  - solo `ConsumerWorkers` es valida para workers inbound.
+- En Identity PostgreSQL se usa `EnsureCreated` para bootstrap inicial en Development.
+  - estrategia formal en ADR: `Docs/ADR-001-IDENTITY-POSTGRES-ENABLEMENT.md`.
 - Siguiente iteracion recomendada:
-  1. consolidar smoke automatizado para EMQX,
-  2. habilitar Identity Postgres cuando el stack EF/Npgsql en .NET 10 quede estable,
-  3. agregar dashboards de metricas (OpenTelemetry collector + backend de metricas).
-
+  1. ajustar umbrales SLO segun trafico real por entorno,
+  2. agregar destino de notificaciones (PagerDuty/Teams/Slack) para alertas criticas,
+  3. ejecutar plan de habilitacion de Identity Postgres segun ADR.
