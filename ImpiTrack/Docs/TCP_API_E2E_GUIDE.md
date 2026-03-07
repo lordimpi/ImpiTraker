@@ -126,7 +126,7 @@ Notas del script:
 - Ops expone correlacion por `sessionId` y `packetId`.
 - Dedupe de tracking activo por `positions.dedupe_key` (sin duplicados por replay).
 
-## 10) EMQX local (bus interno)
+## 9) EMQX local (bus interno)
 
 Configura en `TcpServer/appsettings.Development.json`:
 - `EventBus:Provider = Emqx`
@@ -142,7 +142,7 @@ Estado actual recomendado para cierre:
 - Fase 4: cerrada para capa de negocio multi-proveedor (SqlServer/Postgres).
 - Identity en Postgres: diferido en net10 estable (usar `IdentityStorage:Provider=InMemory` o `SqlServer`).
 
-## 9) Troubleshooting de proveedores
+## 10) Troubleshooting de proveedores
 
 - SQL Server `SSPI` (`No se puede generar contexto SSPI`):
   usa un usuario SQL dedicado en vez de `Integrated Security=True`, o valida SPN/Kerberos del host SQL.
@@ -153,3 +153,10 @@ Estado actual recomendado para cierre:
 - PostgreSQL en Identity (`MissingMethodException`):
   en net10 estable, configura `IdentityStorage:Provider=InMemory` o `SqlServer`.
   Si pones `Postgres`, la API ahora falla al inicio con error explicito.
+
+## 11) Estado y deuda abierta
+
+- Backend Fase 0, 1, 2, 3 y 4: cerrado para alcance actual.
+- SQL Server: proveedor principal validado para desarrollo local.
+- EMQX interno: habilitado para pruebas locales.
+- Deuda abierta: `IdentityStorage:Provider=Postgres` diferido hasta estabilidad .NET 10 + EF/Npgsql/Identity.

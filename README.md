@@ -11,6 +11,22 @@
 
 ---
 
+## Estado actual (Mar 2026)
+
+- Backend core operativo y estable en .NET 10.
+- Fase 0, 1, 2, 3 y 4 del backend cerradas en alcance actual.
+- SQL Server validado para desarrollo local y smoke.
+- Event Bus interno disponible con `InMemory` y `EMQX`.
+- Observabilidad base disponible (logs estructurados + metricas + alertas iniciales).
+
+### Deuda abierta explicita
+
+1. Identity sobre PostgreSQL en .NET 10: diferido por estabilidad del stack EF/Npgsql/Identity.
+2. CI/CD formal en GitHub Actions para build/test/smoke automatico.
+3. Afinar dashboards/umbrales de alerta con trafico real de produccion.
+
+---
+
 ## 0. Tabla de contenidos
 
 1. [Visión y objetivos](#1-visión-y-objetivos)  
@@ -714,6 +730,9 @@ Para soportar `/api/ops/*`, las tablas deben incluir:
 ---
 
 ## 16. Roadmap
+
+> **Estado real:** Fase 0, 1, 2, 3 y 4 del backend ya estan cerradas para el alcance actual.
+> Los bullets siguientes quedan como roadmap historico/evolutivo.
 
 **Fase 1 (MVP Core)**
 - Worker multi-puerto + framing robusto
