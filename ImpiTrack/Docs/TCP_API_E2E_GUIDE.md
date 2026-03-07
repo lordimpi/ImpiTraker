@@ -2,6 +2,9 @@
 
 Esta guia valida backend local completo: auth, vinculacion de GPS, ingesta TCP y observabilidad Ops.
 
+Para una ejecucion manual paso a paso (con comandos copy/paste), usa tambien:
+- `ImpiTrack/Docs/MANUAL_E2E_EXECUTION_PLAN.md`
+
 ## 1) Prerrequisitos
 
 - .NET 10 instalado.
@@ -128,7 +131,7 @@ Notas del script:
 - Ops expone correlacion por `sessionId` y `packetId`.
 - Dedupe de tracking activo por `positions.dedupe_key` (sin duplicados por replay).
 
-## 10) EMQX local (bus interno)
+## 9) EMQX local (bus interno)
 
 Configura en `TcpServer/appsettings.Development.json`:
 - `EventBus:Provider = Emqx`
@@ -175,7 +178,7 @@ Cobertura de ambos:
 - publicacion de artefactos `.artifacts/*.log`
 - validacion de alertas SLO (reglas Prometheus cargadas).
 
-## 9) Troubleshooting de proveedores
+## 10) Troubleshooting de proveedores
 
 - SQL Server `SSPI` (`No se puede generar contexto SSPI`):
   usa un usuario SQL dedicado en vez de `Integrated Security=True`, o valida SPN/Kerberos del host SQL.
@@ -183,6 +186,13 @@ Cobertura de ambos:
   habilita TCP/IP en SQL Server Configuration Manager y revisa firewall/regla del puerto 1433.
 - PostgreSQL `28P01 password authentication failed`:
   corrige `Username/Password` o crea el usuario/DB objetivo antes del smoke.
-- PostgreSQL en Identity (schema inicial no creado):
-  valida `IdentityStorage:Provider=Postgres`, cadena de conexion y ejecuta la API en `Development`
-  para que `EnsureCreated` cree tablas base de Identity.
+- PostgreSQL en Identity (`MissingMethodException`):
+  en net10 estable, configura `IdentityStorage:Provider=InMemory` o `SqlServer`.
+  Si pones `Postgres`, la API ahora falla al inicio con error explicito.
+
+## 11) Estado y deuda abierta
+
+- Backend Fase 0, 1, 2, 3 y 4: cerrado para alcance actual.
+- SQL Server: proveedor principal validado para desarrollo local.
+- EMQX interno: habilitado para pruebas locales.
+- Deuda abierta: `IdentityStorage:Provider=Postgres` diferido hasta estabilidad .NET 10 + EF/Npgsql/Identity.
