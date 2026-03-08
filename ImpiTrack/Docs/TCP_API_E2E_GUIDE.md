@@ -184,6 +184,26 @@ Si no ves mensajes:
 - confirma que EMQX este arriba (`docker ps`),
 - revisa logs del worker para errores de publish/reintentos/DLQ.
 
+### 9.4 EMQX produccion (auth + ACL + TLS)
+
+Objetivo de produccion:
+- `EventBus:Provider = Emqx`
+- `EventBus:UseTls = true`
+- `EventBus:Port = 8883`
+- `EventBus:Username` y `EventBus:Password` definidos
+
+ACL minima recomendada para el usuario del worker:
+- publish: `v1/telemetry/+`
+- publish: `v1/status/+`
+- publish: `v1/dlq/#`
+- subscribe (solo diagnostico): `v1/#` opcional
+
+Checklist TLS:
+1. Broker EMQX con listener TLS activo (8883) y certificado valido.
+2. Host donde corre el worker confia en el certificado/CA del broker.
+3. Conexion MQTT exitosa sin errores de handshake/certificate.
+4. Publicacion en topics `v1/telemetry/{imei}` y `v1/status/{imei}` con QoS esperado.
+
 Estado actual recomendado para cierre:
 - Fase 3: cerrada con SQL Server.
 - Fase 4: cerrada para capa de negocio multi-proveedor (SqlServer/Postgres).

@@ -127,15 +127,41 @@ Validar en respuestas:
 - `ackSent = true` en mensajes validos
 - `parseStatus` consistente con payload valido/invalido
 
-## 8) Pasada opcional con EMQX
+## 8) Pasada EMQX (A/B)
+
+### Pasada A (local sin TLS)
 
 1. Levantar broker:
 ```powershell
 docker run -d --name emqx-local -p 1883:1883 -p 18083:18083 emqx/emqx:latest
 ```
-2. Cambiar `EventBus:Provider = Emqx` en `TcpServer/appsettings.Development.json`.
+2. Configurar en `TcpServer/appsettings.Development.json`:
+   - `EventBus:Provider = Emqx`
+   - `EventBus:Port = 1883`
+   - `EventBus:UseTls = false`
 3. Reiniciar TcpServer y repetir envio TCP.
-4. Validar que no hay errores de publish en logs del worker.
+4. Validar publish con:
+```powershell
+docker run --rm eclipse-mosquitto:2 mosquitto_sub -h host.docker.internal -p 1883 -t "v1/#" -v
+```
+
+### Pasada B (prod-like con auth + TLS)
+
+1. Configurar EMQX con usuario/password y ACL minima de publish:
+   - `v1/telemetry/+`
+   - `v1/status/+`
+   - `v1/dlq/#`
+2. Habilitar listener TLS en `8883` en broker.
+3. Configurar en `TcpServer/appsettings.Development.json`:
+   - `EventBus:Provider = Emqx`
+   - `EventBus:Port = 8883`
+   - `EventBus:UseTls = true`
+   - `EventBus:Username` y `EventBus:Password`
+4. Asegurar confianza del certificado en el host del worker.
+5. Reiniciar TcpServer y repetir envio TCP.
+6. Criterio de exito:
+   - sin errores de auth/TLS en logs,
+   - eventos publicados en `v1/telemetry/{imei}` y `v1/status/{imei}`.
 
 ## 9) Criterios de fallo comunes
 
