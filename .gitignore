@@ -13,6 +13,7 @@
 /Documents
 .artifacts/
 .dotnet/
+.codex/
 AGENTS.md
 AI_PLAYBOOK.md
 skills/playbook-backend/
