@@ -140,6 +140,50 @@ Comportamiento esperado:
 - Publica `v1/telemetry/{imei}` y `v1/status/{imei}`.
 - Si falla la publicacion y se agotan reintentos, envia `v1/dlq/{topic}` cuando `EnableDlq=true`.
 
+### 9.1 Configuracion recomendada (ejemplo)
+
+```json
+"EventBus": {
+  "Provider": "Emqx",
+  "Host": "127.0.0.1",
+  "Port": 1883,
+  "ClientId": "imptrack-worker-dev",
+  "Username": "",
+  "Password": "",
+  "UseTls": false,
+  "TelemetryQoS": 1,
+  "StatusQoS": 1,
+  "DlqQoS": 1,
+  "MaxPublishRetries": 3,
+  "RetryBackoffMs": 500,
+  "EnableDlq": true
+}
+```
+
+### 9.2 Arranque de EMQX en local
+
+```powershell
+docker run -d --name emqx-local -p 1883:1883 -p 18083:18083 emqx/emqx:latest
+```
+
+Luego reinicia `TcpServer` para que tome el provider `Emqx`.
+
+### 9.3 Verificar publicacion MQTT
+
+Suscribete a todos los topics `v1/#`:
+
+```powershell
+docker run --rm eclipse-mosquitto:2 mosquitto_sub -h host.docker.internal -p 1883 -t "v1/#" -v
+```
+
+En otra terminal, envia payloads TCP (Coban/Cantrack).  
+Debes observar eventos en topics `v1/telemetry/{imei}` y `v1/status/{imei}`.
+
+Si no ves mensajes:
+- valida que `EventBus:Provider` este en `Emqx`,
+- confirma que EMQX este arriba (`docker ps`),
+- revisa logs del worker para errores de publish/reintentos/DLQ.
+
 Estado actual recomendado para cierre:
 - Fase 3: cerrada con SQL Server.
 - Fase 4: cerrada para capa de negocio multi-proveedor (SqlServer/Postgres).
