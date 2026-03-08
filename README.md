@@ -25,11 +25,13 @@
 - SQL Server validado para desarrollo local y smoke.
 - Event Bus interno disponible con `InMemory` y `EMQX`.
 - Observabilidad base disponible (logs estructurados + metricas + alertas iniciales).
+- CI base disponible en GitHub Actions (build/test + smoke manual).
+- Estado general: backend en condicion GO para iniciar frontend.
 
 ### Deuda abierta explicita
 
 1. Identity sobre PostgreSQL en .NET 10: diferido por estabilidad del stack EF/Npgsql/Identity.
-2. CI/CD formal en GitHub Actions para build/test/smoke automatico.
+2. Hardening final de EMQX en ambiente productivo (auth, ACL y TLS operativos).
 3. Afinar dashboards/umbrales de alerta con trafico real de produccion.
 
 ---

@@ -142,23 +142,69 @@ Comportamiento esperado:
 - Publica `v1/telemetry/{imei}` y `v1/status/{imei}`.
 - Si falla la publicacion y se agotan reintentos, envia `v1/dlq/{topic}` cuando `EnableDlq=true`.
 
-Smoke automatizado recomendado:
+### 9.1 Configuracion recomendada (ejemplo)
 
-```powershell
-.\ImpiTrack\Tools\Run-EmqxSmoke.ps1
+```json
+"EventBus": {
+  "Provider": "Emqx",
+  "Host": "127.0.0.1",
+  "Port": 1883,
+  "ClientId": "imptrack-worker-dev",
+  "Username": "",
+  "Password": "",
+  "UseTls": false,
+  "TelemetryQoS": 1,
+  "StatusQoS": 1,
+  "DlqQoS": 1,
+  "MaxPublishRetries": 3,
+  "RetryBackoffMs": 500,
+  "EnableDlq": true
+}
 ```
 
-Ejemplo CI (sin recompilar dentro del smoke):
+### 9.2 Arranque de EMQX en local
 
 ```powershell
-.\ImpiTrack\Tools\Run-EmqxSmoke.ps1 -NoBuild -StartupTimeoutSeconds 120 -TopicTimeoutSeconds 30
+docker run -d --name emqx-local -p 1883:1883 -p 18083:18083 emqx/emqx:latest
 ```
 
-El script valida:
-- publicacion en `v1/telemetry/+`
-- publicacion en `v1/status/+`
-- ruta DLQ en `v1/dlq/#` usando fallo simulado por configuracion
-- logs de evidencia en `ImpiTrack/.artifacts/smoke-emqx-worker*.log`
+Luego reinicia `TcpServer` para que tome el provider `Emqx`.
+
+### 9.3 Verificar publicacion MQTT
+
+Suscribete a todos los topics `v1/#`:
+
+```powershell
+docker run --rm eclipse-mosquitto:2 mosquitto_sub -h host.docker.internal -p 1883 -t "v1/#" -v
+```
+
+En otra terminal, envia payloads TCP (Coban/Cantrack).  
+Debes observar eventos en topics `v1/telemetry/{imei}` y `v1/status/{imei}`.
+
+Si no ves mensajes:
+- valida que `EventBus:Provider` este en `Emqx`,
+- confirma que EMQX este arriba (`docker ps`),
+- revisa logs del worker para errores de publish/reintentos/DLQ.
+
+### 9.4 EMQX produccion (auth + ACL + TLS)
+
+Objetivo de produccion:
+- `EventBus:Provider = Emqx`
+- `EventBus:UseTls = true`
+- `EventBus:Port = 8883`
+- `EventBus:Username` y `EventBus:Password` definidos
+
+ACL minima recomendada para el usuario del worker:
+- publish: `v1/telemetry/+`
+- publish: `v1/status/+`
+- publish: `v1/dlq/#`
+- subscribe (solo diagnostico): `v1/#` opcional
+
+Checklist TLS:
+1. Broker EMQX con listener TLS activo (8883) y certificado valido.
+2. Host donde corre el worker confia en el certificado/CA del broker.
+3. Conexion MQTT exitosa sin errores de handshake/certificate.
+4. Publicacion en topics `v1/telemetry/{imei}` y `v1/status/{imei}` con QoS esperado.
 
 Estado actual recomendado para cierre:
 - Fase 3: cerrada con SQL Server.
