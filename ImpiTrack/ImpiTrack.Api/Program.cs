@@ -1,4 +1,3 @@
-using System.Text;
 using ImpiTrack.Api.Http;
 using ImpiTrack.Application.Extensions;
 using ImpiTrack.Auth.Infrastructure.Configuration;
@@ -20,6 +19,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OpenTelemetry.Metrics;
 using Scalar.AspNetCore;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -58,6 +58,16 @@ if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Te
 {
     builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
 }
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
 
 builder.Services.AddImpiTrackOptionsCore();
 builder.Services.BindOptions<JwtAuthOptions>(builder.Configuration, JwtAuthOptions.SectionName);
@@ -424,6 +434,7 @@ app.UseStatusCodePages(async statusCodeContext =>
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseCors("AllowAll");
 app.MapControllers();
 
 app.MapGet("/", () => Results.Redirect("/scalar/v1"))
