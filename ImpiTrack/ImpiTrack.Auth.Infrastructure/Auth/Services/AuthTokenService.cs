@@ -188,6 +188,27 @@ public sealed class AuthTokenService : IAuthTokenService
     }
 
     /// <inheritdoc />
+    public async Task RequestPasswordResetAsync(
+        string email,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string normalizedEmail = email.Trim();
+        ApplicationUser? user = await _userManager.FindByEmailAsync(normalizedEmail);
+        if (user is null)
+        {
+            _logger.LogInformation("password_reset_request_ignored reason=user_not_found email={email}", normalizedEmail);
+            return;
+        }
+
+        string passwordResetToken = await _userManager.GeneratePasswordResetTokenAsync(user);
+        await EnqueuePasswordResetEmailAsync(user, normalizedEmail, passwordResetToken, CancellationToken.None);
+
+        _logger.LogInformation("password_reset_requested userId={userId} email={email}", user.Id, normalizedEmail);
+    }
+
+    /// <inheritdoc />
     public async Task<AuthTokenPair?> LoginAsync(
         string userNameOrEmail,
         string password,
@@ -213,6 +234,50 @@ public sealed class AuthTokenService : IAuthTokenService
         }
 
         return await CreateTokenPairAsync(user, remoteIp, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ResetPasswordResult> ResetPasswordAsync(
+        string email,
+        string token,
+        string newPassword,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string normalizedEmail = email.Trim();
+        ApplicationUser? user = await _userManager.FindByEmailAsync(normalizedEmail);
+        if (user is null)
+        {
+            _logger.LogInformation("password_reset_rejected reason=user_not_found email={email}", normalizedEmail);
+            return new ResetPasswordResult(ResetPasswordStatus.InvalidRequest, []);
+        }
+
+        IdentityResult resetResult = await _userManager.ResetPasswordAsync(user, token, newPassword);
+        if (!resetResult.Succeeded)
+        {
+            string[] errors = resetResult.Errors.Select(x => x.Description).ToArray();
+            bool invalidToken = resetResult.Errors.Any(x =>
+                string.Equals(x.Code, "InvalidToken", StringComparison.OrdinalIgnoreCase));
+
+            _logger.LogWarning(
+                "password_reset_failed userId={userId} email={email} invalidToken={invalidToken}",
+                user.Id,
+                normalizedEmail,
+                invalidToken);
+
+            return new ResetPasswordResult(
+                invalidToken ? ResetPasswordStatus.InvalidRequest : ResetPasswordStatus.Failed,
+                errors);
+        }
+
+        await _userManager.UpdateSecurityStampAsync(user);
+        await _userManager.ResetAccessFailedCountAsync(user);
+        await _userManager.SetLockoutEndDateAsync(user, null);
+        await RevokeActiveRefreshTokensAsync(user.Id, cancellationToken);
+
+        _logger.LogInformation("password_reset_completed userId={userId} email={email}", user.Id, normalizedEmail);
+        return new ResetPasswordResult(ResetPasswordStatus.Succeeded, []);
     }
 
     /// <inheritdoc />
@@ -372,6 +437,27 @@ public sealed class AuthTokenService : IAuthTokenService
         }
     }
 
+    private async Task RevokeActiveRefreshTokensAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        List<RefreshToken> tokens = await _dbContext.RefreshTokens
+            .Where(x => x.UserId == userId && x.RevokedAtUtc == null && x.ExpiresAtUtc > DateTimeOffset.UtcNow)
+            .ToListAsync(cancellationToken);
+
+        if (tokens.Count == 0)
+        {
+            return;
+        }
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (RefreshToken token in tokens)
+        {
+            token.RevokedAtUtc = now;
+            token.RevokedByIp = "password_reset";
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
     private async Task EnqueueVerificationEmailAsync(
         ApplicationUser user,
         string normalizedUserName,
@@ -415,4 +501,48 @@ public sealed class AuthTokenService : IAuthTokenService
             user.Id,
             email);
     }
+
+    private async Task EnqueuePasswordResetEmailAsync(
+        ApplicationUser user,
+        string normalizedEmail,
+        string passwordResetToken,
+        CancellationToken cancellationToken)
+    {
+        string email = user.Email ?? normalizedEmail;
+        string userName = user.UserName ?? email;
+        EmailMessage message = _emailTemplateRenderer.BuildResetPasswordMessage(user.Id, email, userName, passwordResetToken);
+
+        bool queued;
+        try
+        {
+            queued = await _emailDispatchQueue.EnqueueAsync(message, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(
+                exception,
+                "password_reset_email_enqueue_exception userId={userId} email={email}",
+                user.Id,
+                email);
+
+            return;
+        }
+
+        if (!queued)
+        {
+            _logger.LogWarning(
+                "password_reset_email_enqueue_timeout userId={userId} email={email}",
+                user.Id,
+                email);
+
+            return;
+        }
+
+        _logger.LogInformation(
+            "password_reset_email_queued template={template} userId={userId} email={email}",
+            message.TemplateName,
+            user.Id,
+            email);
+    }
 }
+

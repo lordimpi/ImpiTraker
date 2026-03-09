@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using ImpiTrack.Api.Http;
 using ImpiTrack.Auth.Infrastructure.Auth.Contracts;
 using ImpiTrack.Auth.Infrastructure.Auth.Models;
@@ -154,6 +154,22 @@ public sealed class AuthController : ControllerBase
     }
 
     /// <summary>
+    /// Inicia recuperacion de contrasena sin revelar si el correo existe.
+    /// </summary>
+    /// <param name="request">Correo objetivo para envio del enlace.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>200 para cualquier solicitud valida de formato.</returns>
+    [HttpPost("forgot-password")]
+    [ProducesResponseType(typeof(ApiResponse<object?>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<object?>>> ForgotPassword(
+        [FromBody] ForgotPasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _authTokenService.RequestPasswordResetAsync(request.Email, cancellationToken);
+        return this.OkEnvelope();
+    }
+
+    /// <summary>
     /// Autentica credenciales y devuelve access token con refresh token.
     /// </summary>
     /// <param name="request">Credenciales de autenticacion.</param>
@@ -183,6 +199,40 @@ public sealed class AuthController : ControllerBase
         }
 
         return this.OkEnvelope(pair);
+    }
+
+    /// <summary>
+    /// Restablece contrasena mediante correo y token emitido por Identity.
+    /// </summary>
+    /// <param name="request">Correo, token y nueva contrasena.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>Resultado del restablecimiento solicitado.</returns>
+    [HttpPost("reset-password")]
+    [ProducesResponseType(typeof(ApiResponse<object?>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object?>), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ApiResponse<object?>>> ResetPassword(
+        [FromBody] ResetPasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        ResetPasswordResult result = await _authTokenService.ResetPasswordAsync(
+            request.Email,
+            request.Token,
+            request.NewPassword,
+            cancellationToken);
+
+        return result.Status switch
+        {
+            ResetPasswordStatus.Succeeded => this.OkEnvelope(),
+            ResetPasswordStatus.InvalidRequest => this.FailEnvelope<object?>(
+                StatusCodes.Status400BadRequest,
+                "invalid_password_reset_token",
+                "No fue posible restablecer la contrasena solicitada."),
+            _ => this.FailEnvelope<object?>(
+                StatusCodes.Status400BadRequest,
+                "password_reset_failed",
+                "No fue posible restablecer la contrasena solicitada.",
+                result.Errors)
+        };
     }
 
     /// <summary>
@@ -295,3 +345,4 @@ public sealed class AuthController : ControllerBase
         };
     }
 }
+
