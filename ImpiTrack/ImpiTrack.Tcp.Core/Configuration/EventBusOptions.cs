@@ -13,7 +13,7 @@ public sealed class EventBusOptions
     /// <summary>
     /// Provider del bus de eventos. Valores soportados: InMemory, Emqx.
     /// </summary>
-    public string Provider { get; set; } = "InMemory";
+    public string Provider { get; set; } = "Emqx";
 
     /// <summary>
     /// Host del broker EMQX para conexiones MQTT.
