@@ -542,24 +542,72 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken)
+    public async Task<PagedResult<UserAccountOverview>> GetUsersAsync(AdminUserListQuery query, CancellationToken cancellationToken)
     {
-        int normalizedLimit = Math.Clamp(limit, 1, 500);
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+        int offset = (page - 1) * pageSize;
+        string sortBy = query.SortBy.Trim();
+        string sortDirection = string.Equals(query.SortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
+        string? search = string.IsNullOrWhiteSpace(query.Search) ? null : query.Search.Trim();
+        string? planCode = string.IsNullOrWhiteSpace(query.PlanCode) ? null : query.PlanCode.Trim().ToUpperInvariant();
+
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var parameters = new
+        {
+            Search = search,
+            SearchPattern = search is null ? null : $"%{search}%",
+            PlanCode = planCode,
+            Offset = offset,
+            PageSize = pageSize
+        };
+
+        CommandDefinition countCommand = new(
+            GetUsersCountSql(_context.Provider),
+            parameters,
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int totalItems = await connection.QuerySingleAsync<int>(countCommand);
+
         CommandDefinition command = new(
-            GetUsersOverviewSql(_context.Provider),
-            new { Limit = normalizedLimit },
+            GetUsersOverviewPageSql(
+                _context.Provider,
+                ResolveUserSortColumn(_context.Provider, sortBy),
+                sortDirection),
+            parameters,
             commandTimeout: _context.CommandTimeoutSeconds,
             cancellationToken: cancellationToken);
 
         IEnumerable<UserOverviewRow> rows = await connection.QueryAsync<UserOverviewRow>(command);
-        return rows.Select(x => new UserAccountOverview(
+        IReadOnlyList<UserAccountOverview> items = rows.Select(x => new UserAccountOverview(
             x.UserId,
             x.Email,
             x.FullName,
             x.PlanCode,
             x.MaxGps,
             x.UsedGps)).ToArray();
+
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        return new PagedResult<UserAccountOverview>(items, page, pageSize, totalItems, totalPages);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<AdminPlanDto>> GetPlansAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetPlansSql(_context.Provider),
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<PlanRow> rows = await connection.QueryAsync<PlanRow>(command);
+        return rows.Select(x => new AdminPlanDto(
+            x.PlanId,
+            x.Code,
+            x.Name,
+            x.MaxGps,
+            x.IsActive)).ToArray();
     }
 
     /// <inheritdoc />
@@ -1463,13 +1511,51 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         };
     }
 
-    private static string GetUsersOverviewSql(DatabaseProvider provider)
+    private static string GetUsersCountSql(DatabaseProvider provider)
     {
         return provider switch
         {
             DatabaseProvider.SqlServer =>
                 """
-                SELECT TOP (@Limit)
+                SELECT COUNT(*)
+                FROM user_profiles up
+                INNER JOIN user_plan_subscriptions s
+                    ON s.user_id = up.user_id
+                   AND s.status = 'Active'
+                   AND s.ends_at_utc IS NULL
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                WHERE (@Search IS NULL
+                    OR up.email LIKE @SearchPattern
+                    OR ISNULL(up.full_name, '') LIKE @SearchPattern)
+                  AND (@PlanCode IS NULL OR p.code = @PlanCode);
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT COUNT(*)::INT
+                FROM user_profiles up
+                INNER JOIN user_plan_subscriptions s
+                    ON s.user_id = up.user_id
+                   AND s.status = 'Active'
+                   AND s.ends_at_utc IS NULL
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                WHERE (@Search IS NULL
+                    OR up.email ILIKE @SearchPattern
+                    OR COALESCE(up.full_name, '') ILIKE @SearchPattern)
+                  AND (@PlanCode IS NULL OR p.code = @PlanCode);
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUsersOverviewPageSql(DatabaseProvider provider, string orderByColumn, string sortDirection)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                $"""
+                SELECT
                     up.user_id AS UserId,
                     up.email AS Email,
                     up.full_name AS FullName,
@@ -1490,10 +1576,15 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     WHERE ud.user_id = up.user_id
                       AND ud.is_active = 1
                 ) usage_data
-                ORDER BY up.created_at_utc DESC;
+                WHERE (@Search IS NULL
+                    OR up.email LIKE @SearchPattern
+                    OR ISNULL(up.full_name, '') LIKE @SearchPattern)
+                  AND (@PlanCode IS NULL OR p.code = @PlanCode)
+                ORDER BY {orderByColumn} {sortDirection}, up.user_id ASC
+                OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
                 """,
             DatabaseProvider.Postgres =>
-                """
+                $"""
                 SELECT
                     up.user_id AS "UserId",
                     up.email AS "Email",
@@ -1515,8 +1606,73 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     WHERE ud.user_id = up.user_id
                       AND ud.is_active = TRUE
                 ) usage_data ON TRUE
-                ORDER BY up.created_at_utc DESC
-                LIMIT @Limit;
+                WHERE (@Search IS NULL
+                    OR up.email ILIKE @SearchPattern
+                    OR COALESCE(up.full_name, '') ILIKE @SearchPattern)
+                  AND (@PlanCode IS NULL OR p.code = @PlanCode)
+                ORDER BY {orderByColumn} {sortDirection}, up.user_id ASC
+                LIMIT @PageSize OFFSET @Offset;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string ResolveUserSortColumn(DatabaseProvider provider, string sortBy)
+    {
+        string normalized = sortBy.Trim().ToLowerInvariant();
+        return provider switch
+        {
+            DatabaseProvider.SqlServer => normalized switch
+            {
+                "email" => "up.email",
+                "fullname" => "ISNULL(up.full_name, '')",
+                "plancode" => "p.code",
+                "maxgps" => "p.max_gps",
+                "usedgps" => "ISNULL(usage_data.used_gps, 0)",
+                "createdat" => "up.created_at_utc",
+                _ => "up.email"
+            },
+            DatabaseProvider.Postgres => normalized switch
+            {
+                "email" => "up.email",
+                "fullname" => "COALESCE(up.full_name, '')",
+                "plancode" => "p.code",
+                "maxgps" => "p.max_gps",
+                "usedgps" => "COALESCE(usage_data.used_gps, 0)",
+                "createdat" => "up.created_at_utc",
+                _ => "up.email"
+            },
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetPlansSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    plan_id AS PlanId,
+                    code AS Code,
+                    name AS Name,
+                    max_gps AS MaxGps,
+                    is_active AS IsActive
+                FROM plans
+                WHERE is_active = 1
+                ORDER BY name ASC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    plan_id AS "PlanId",
+                    code AS "Code",
+                    name AS "Name",
+                    max_gps AS "MaxGps",
+                    is_active AS "IsActive"
+                FROM plans
+                WHERE is_active = TRUE
+                ORDER BY name ASC;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
@@ -1940,6 +2096,19 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         public long AckSent { get; set; }
 
         public long Backlog { get; set; }
+    }
+
+    private sealed class PlanRow
+    {
+        public Guid PlanId { get; set; }
+
+        public string Code { get; set; } = string.Empty;
+
+        public string Name { get; set; } = string.Empty;
+
+        public int MaxGps { get; set; }
+
+        public bool IsActive { get; set; }
     }
 
     private sealed class UserSummaryRow

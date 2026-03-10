@@ -12,6 +12,13 @@ namespace ImpiTrack.DataAccess.InMemory;
 public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository
 {
     private const string DefaultPlanCode = "BASIC";
+    private static readonly IReadOnlyList<AdminPlanDto> Plans =
+    [
+        new AdminPlanDto(Guid.Parse("10000000-0000-0000-0000-000000000001"), "BASIC", "Basic", 3, true),
+        new AdminPlanDto(Guid.Parse("10000000-0000-0000-0000-000000000002"), "PRO", "Pro", 10, true),
+        new AdminPlanDto(Guid.Parse("10000000-0000-0000-0000-000000000003"), "ENTERPRISE", "Enterprise", 100, true)
+    ];
+
     private readonly ConcurrentDictionary<Guid, InMemoryUserAccount> _accounts = new();
     private readonly ConcurrentDictionary<string, Guid> _activeImeiOwners = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _sync = new();
@@ -103,16 +110,7 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
 
         _accounts.AddOrUpdate(
             userId,
-            _ => new InMemoryUserAccount
-            {
-                UserId = userId,
-                Email = email,
-                FullName = fullName,
-                PlanCode = DefaultPlanCode,
-                PlanName = "Basic",
-                MaxGps = 3,
-                CreatedAtUtc = nowUtc
-            },
+            _ => CreateAccount(userId, email, fullName, nowUtc),
             (_, existing) =>
             {
                 existing.Email = email;
@@ -239,21 +237,53 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken)
+    public Task<PagedResult<UserAccountOverview>> GetUsersAsync(AdminUserListQuery query, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        int normalizedLimit = Math.Clamp(limit, 1, 500);
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+        string? search = query.Search?.Trim();
+        string? planCode = string.IsNullOrWhiteSpace(query.PlanCode)
+            ? null
+            : query.PlanCode.Trim().ToUpperInvariant();
+        string sortBy = query.SortBy.Trim();
+        bool descending = string.Equals(query.SortDirection, "desc", StringComparison.OrdinalIgnoreCase);
 
-        IReadOnlyList<UserAccountOverview> rows = _accounts.Values
-            .OrderBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
-            .Take(normalizedLimit)
-            .Select(x => new UserAccountOverview(
-                x.UserId,
-                x.Email,
-                x.FullName,
-                x.PlanCode,
-                x.MaxGps,
-                x.Devices.Count))
+        IEnumerable<InMemoryUserAccount> filtered = _accounts.Values;
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            filtered = filtered.Where(x =>
+                x.Email.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrWhiteSpace(x.FullName) &&
+                 x.FullName.Contains(search, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (planCode is not null)
+        {
+            filtered = filtered.Where(x => string.Equals(x.PlanCode, planCode, StringComparison.OrdinalIgnoreCase));
+        }
+
+        IEnumerable<InMemoryUserAccount> ordered = ApplyOrdering(filtered, sortBy, descending);
+        int totalItems = filtered.Count();
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+
+        IReadOnlyList<UserAccountOverview> rows = ordered
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(ToOverview)
+            .ToArray();
+
+        return Task.FromResult(new PagedResult<UserAccountOverview>(rows, page, pageSize, totalItems, totalPages));
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<AdminPlanDto>> GetPlansAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<AdminPlanDto> rows = Plans
+            .Where(x => x.IsActive)
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         return Task.FromResult(rows);
@@ -274,39 +304,86 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
             return Task.FromResult(false);
         }
 
-        if (!TryResolvePlan(planCode, out string normalizedCode, out string name, out int maxGps))
+        if (!TryResolvePlan(planCode, out AdminPlanDto? plan) || plan is null)
         {
             return Task.FromResult(false);
         }
 
-        account.PlanCode = normalizedCode;
-        account.PlanName = name;
-        account.MaxGps = maxGps;
+        account.PlanCode = plan.Code;
+        account.PlanName = plan.Name;
+        account.MaxGps = plan.MaxGps;
         return Task.FromResult(true);
     }
 
-    private static bool TryResolvePlan(string planCode, out string normalizedCode, out string name, out int maxGps)
+    private static InMemoryUserAccount CreateAccount(Guid userId, string email, string? fullName, DateTimeOffset nowUtc)
     {
-        normalizedCode = planCode.Trim().ToUpperInvariant();
-        switch (normalizedCode)
+        if (!TryResolvePlan(DefaultPlanCode, out AdminPlanDto? plan) || plan is null)
         {
-            case "BASIC":
-                name = "Basic";
-                maxGps = 3;
-                return true;
-            case "PRO":
-                name = "Pro";
-                maxGps = 10;
-                return true;
-            case "ENTERPRISE":
-                name = "Enterprise";
-                maxGps = 100;
-                return true;
-            default:
-                name = string.Empty;
-                maxGps = 0;
-                return false;
+            throw new InvalidOperationException("default_plan_not_configured");
         }
+
+        return new InMemoryUserAccount
+        {
+            UserId = userId,
+            Email = email,
+            FullName = fullName,
+            PlanCode = plan.Code,
+            PlanName = plan.Name,
+            MaxGps = plan.MaxGps,
+            CreatedAtUtc = nowUtc
+        };
+    }
+
+    private static bool TryResolvePlan(string planCode, out AdminPlanDto? plan)
+    {
+        string normalizedCode = planCode.Trim().ToUpperInvariant();
+        plan = Plans.FirstOrDefault(x => string.Equals(x.Code, normalizedCode, StringComparison.OrdinalIgnoreCase) && x.IsActive);
+        return plan is not null;
+    }
+
+    private static UserAccountOverview ToOverview(InMemoryUserAccount account)
+    {
+        return new UserAccountOverview(
+            account.UserId,
+            account.Email,
+            account.FullName,
+            account.PlanCode,
+            account.MaxGps,
+            account.Devices.Count);
+    }
+
+    private static IEnumerable<InMemoryUserAccount> ApplyOrdering(
+        IEnumerable<InMemoryUserAccount> source,
+        string sortBy,
+        bool descending)
+    {
+        return sortBy.ToLowerInvariant() switch
+        {
+            "fullname" => descending
+                ? source.OrderByDescending(x => x.FullName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.FullName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            "plancode" => descending
+                ? source.OrderByDescending(x => x.PlanCode, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.PlanCode, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            "maxgps" => descending
+                ? source.OrderByDescending(x => x.MaxGps).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.MaxGps).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            "usedgps" => descending
+                ? source.OrderByDescending(x => x.Devices.Count).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.Devices.Count).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            "createdat" => descending
+                ? source.OrderByDescending(x => x.CreatedAtUtc).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.CreatedAtUtc).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            _ => descending
+                ? source.OrderByDescending(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.UserId)
+                : source.OrderBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.UserId)
+        };
     }
 
     private sealed class InMemoryUserAccount

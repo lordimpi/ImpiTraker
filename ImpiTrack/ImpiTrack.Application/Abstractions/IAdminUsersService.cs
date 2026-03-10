@@ -10,10 +10,17 @@ public interface IAdminUsersService
     /// <summary>
     /// Lista usuarios con estado de plan y cuota.
     /// </summary>
-    /// <param name="limit">Maximo de filas.</param>
+    /// <param name="query">Consulta paginada con filtros y ordenamiento.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
     /// <returns>Usuarios encontrados.</returns>
-    Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken);
+    Task<PagedResult<UserAccountOverview>> GetUsersAsync(AdminUserListQuery query, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lista planes administrables para la UI.
+    /// </summary>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Catalogo de planes activos.</returns>
+    Task<IReadOnlyList<AdminPlanDto>> GetPlansAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Obtiene resumen de un usuario.

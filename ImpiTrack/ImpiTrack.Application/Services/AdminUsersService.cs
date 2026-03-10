@@ -25,9 +25,15 @@ public sealed class AdminUsersService : IAdminUsersService
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken)
+    public Task<PagedResult<UserAccountOverview>> GetUsersAsync(AdminUserListQuery query, CancellationToken cancellationToken)
     {
-        return _userAccountRepository.GetUsersAsync(limit, cancellationToken);
+        return _userAccountRepository.GetUsersAsync(query, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<AdminPlanDto>> GetPlansAsync(CancellationToken cancellationToken)
+    {
+        return _userAccountRepository.GetPlansAsync(cancellationToken);
     }
 
     /// <inheritdoc />

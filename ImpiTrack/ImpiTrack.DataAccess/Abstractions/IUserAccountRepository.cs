@@ -67,10 +67,17 @@ public interface IUserAccountRepository
     /// <summary>
     /// Lista usuarios para operacion administrativa.
     /// </summary>
-    /// <param name="limit">Cantidad maxima de resultados.</param>
+    /// <param name="query">Consulta paginada con filtros y ordenamiento.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
-    /// <returns>Vista resumida de usuarios.</returns>
-    Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken);
+    /// <returns>Vista resumida de usuarios paginada.</returns>
+    Task<PagedResult<UserAccountOverview>> GetUsersAsync(AdminUserListQuery query, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lista planes administrables para UI de administracion.
+    /// </summary>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Planes activos disponibles.</returns>
+    Task<IReadOnlyList<AdminPlanDto>> GetPlansAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Asigna un plan activo a un usuario finalizando el anterior.
