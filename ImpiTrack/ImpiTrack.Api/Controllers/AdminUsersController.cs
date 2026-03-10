@@ -69,6 +69,31 @@ public sealed class AdminUsersController : ControllerBase
     }
 
     /// <summary>
+    /// Obtiene los dispositivos vinculados a un usuario especifico.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>Lista de dispositivos activos del usuario.</returns>
+    [HttpGet("{userId:guid}/devices")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserDeviceBinding>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserDeviceBinding>>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<UserDeviceBinding>>>> GetUserDevices(
+        [FromRoute] Guid userId,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<UserDeviceBinding>? devices = await _adminUsersService.GetUserDevicesAsync(userId, cancellationToken);
+        if (devices is null)
+        {
+            return this.FailEnvelope<IReadOnlyList<UserDeviceBinding>>(
+                StatusCodes.Status404NotFound,
+                "user_not_found",
+                "No existe la cuenta solicitada.");
+        }
+
+        return this.OkEnvelope(devices);
+    }
+
+    /// <summary>
     /// Asigna un plan activo a un usuario.
     /// </summary>
     /// <param name="userId">Identificador del usuario.</param>

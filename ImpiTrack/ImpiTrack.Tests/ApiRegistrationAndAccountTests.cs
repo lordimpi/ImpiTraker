@@ -174,6 +174,43 @@ public sealed class ApiRegistrationAndAccountTests
             });
 
         Assert.Equal(HttpStatusCode.OK, bindResponse.StatusCode);
+
+        HttpResponseMessage devicesResponse = await client.GetAsync(
+            $"/api/admin/users/{registerPayload.Data.Registration.UserId}/devices");
+
+        Assert.Equal(HttpStatusCode.OK, devicesResponse.StatusCode);
+        ApiEnvelope<List<UserDeviceResponse>>? devicesPayload = await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<List<UserDeviceResponse>>>();
+        Assert.NotNull(devicesPayload);
+        Assert.True(devicesPayload!.Success);
+        Assert.NotNull(devicesPayload.Data);
+        Assert.Contains(devicesPayload.Data!, x => x.Imei == "111222333444555");
+    }
+
+    [Fact]
+    public async Task AdminUserDevices_ShouldReturnNotFound_WhenUserDoesNotExist()
+    {
+        await using var factory = CreateFactory(seedAdminOnStart: true);
+        using HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage adminLoginResponse = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            userNameOrEmail = "admin",
+            password = "ChangeMe!123"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, adminLoginResponse.StatusCode);
+        ApiEnvelope<AuthTokenPairResponse>? adminToken = await adminLoginResponse.Content.ReadFromJsonAsync<ApiEnvelope<AuthTokenPairResponse>>();
+        Assert.NotNull(adminToken);
+        Assert.NotNull(adminToken!.Data);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.Data!.AccessToken);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/admin/users/{Guid.NewGuid():D}/devices");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using JsonDocument body = await ReadJsonAsync(response);
+        Assert.False(body.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal("user_not_found", body.RootElement.GetProperty("error").GetProperty("code").GetString());
     }
 
     [Fact]

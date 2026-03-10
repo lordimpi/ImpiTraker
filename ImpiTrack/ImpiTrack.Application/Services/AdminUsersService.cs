@@ -43,6 +43,18 @@ public sealed class AdminUsersService : IAdminUsersService
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<UserDeviceBinding>?> GetUserDevicesAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        bool exists = await EnsureProvisionedAsync(userId, cancellationToken);
+        if (!exists)
+        {
+            return null;
+        }
+
+        return await _userAccountRepository.GetUserDevicesAsync(userId, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<SetUserPlanResult> SetUserPlanAsync(Guid userId, string planCode, CancellationToken cancellationToken)
     {
         bool exists = await EnsureProvisionedAsync(userId, cancellationToken);
