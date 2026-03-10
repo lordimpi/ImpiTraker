@@ -9,7 +9,7 @@ namespace ImpiTrack.DataAccess.InMemory;
 /// <summary>
 /// Repositorio en memoria para pruebas locales cuando no hay base de datos SQL configurada.
 /// </summary>
-public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository
+public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository, ITelemetryQueryRepository
 {
     private const string DefaultPlanCode = "BASIC";
     private static readonly IReadOnlyList<AdminPlanDto> Plans =
@@ -21,6 +21,8 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
 
     private readonly ConcurrentDictionary<Guid, InMemoryUserAccount> _accounts = new();
     private readonly ConcurrentDictionary<string, Guid> _activeImeiOwners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, List<StoredPosition>> _positionsByImei = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, List<StoredEvent>> _eventsByImei = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _sync = new();
     private readonly IOpsDataStore _store;
 
@@ -53,8 +55,47 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     public Task<PersistEnvelopeResult> PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _ = envelope;
-        return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
+
+        string? imei = envelope.Message.Imei?.Trim();
+        if (string.IsNullOrWhiteSpace(imei) || !_activeImeiOwners.ContainsKey(imei))
+        {
+            return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.SkippedUnownedDevice));
+        }
+
+        lock (_sync)
+        {
+            if (envelope.Message.MessageType == MessageType.Tracking)
+            {
+                List<StoredPosition> positions = _positionsByImei.GetOrAdd(imei, static _ => []);
+                positions.Add(new StoredPosition(
+                    envelope.PacketId.Value,
+                    envelope.SessionId.Value,
+                    envelope.Message.Protocol,
+                    envelope.Message.MessageType,
+                    envelope.Message.GpsTimeUtc ?? envelope.Message.ReceivedAtUtc,
+                    envelope.Message.ReceivedAtUtc,
+                    envelope.Message.GpsTimeUtc,
+                    envelope.Message.Latitude,
+                    envelope.Message.Longitude,
+                    envelope.Message.SpeedKmh,
+                    envelope.Message.HeadingDeg));
+
+                return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
+            }
+
+            List<StoredEvent> events = _eventsByImei.GetOrAdd(imei, static _ => []);
+            events.Add(new StoredEvent(
+                Guid.NewGuid(),
+                envelope.PacketId.Value,
+                envelope.SessionId.Value,
+                envelope.Message.Protocol,
+                envelope.Message.MessageType,
+                envelope.Message.MessageType.ToString(),
+                envelope.Message.Text,
+                envelope.Message.ReceivedAtUtc));
+
+            return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
+        }
     }
 
     /// <inheritdoc />
@@ -290,6 +331,123 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
+    public Task<IReadOnlyList<TelemetryDeviceSummaryDto>> GetDeviceSummariesAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_accounts.TryGetValue(userId, out InMemoryUserAccount? account))
+        {
+            return Task.FromResult<IReadOnlyList<TelemetryDeviceSummaryDto>>([]);
+        }
+
+        IReadOnlyList<SessionRecord> activeSessions = _store.GetActiveSessions(port: null);
+        IReadOnlyList<TelemetryDeviceSummaryDto> rows = account.Devices
+            .OrderByDescending(x => x.BoundAtUtc)
+            .ThenBy(x => x.Imei, StringComparer.OrdinalIgnoreCase)
+            .Select(device => BuildTelemetrySummary(device, activeSessions))
+            .ToArray();
+
+        return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
+    public Task<bool> HasActiveDeviceBindingAsync(Guid userId, string imei, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_accounts.TryGetValue(userId, out InMemoryUserAccount? account))
+        {
+            return Task.FromResult(false);
+        }
+
+        bool exists = account.Devices.Any(x => string.Equals(x.Imei, imei, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(exists);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<DevicePositionPointDto>> GetPositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_accounts.TryGetValue(userId, out _))
+        {
+            return Task.FromResult<IReadOnlyList<DevicePositionPointDto>>([]);
+        }
+
+        if (!_positionsByImei.TryGetValue(imei, out List<StoredPosition>? positions))
+        {
+            return Task.FromResult<IReadOnlyList<DevicePositionPointDto>>([]);
+        }
+
+        IReadOnlyList<DevicePositionPointDto> rows = positions
+            .Where(x =>
+                x.Latitude.HasValue &&
+                x.Longitude.HasValue &&
+                x.OccurredAtUtc >= fromUtc &&
+                x.OccurredAtUtc <= toUtc)
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .ThenByDescending(x => x.ReceivedAtUtc)
+            .Take(limit)
+            .Select(x => new DevicePositionPointDto(
+                x.OccurredAtUtc,
+                x.ReceivedAtUtc,
+                x.GpsTimeUtc,
+                x.Latitude!.Value,
+                x.Longitude!.Value,
+                x.SpeedKmh,
+                x.HeadingDeg,
+                x.PacketId,
+                x.SessionId))
+            .ToArray();
+
+        return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<DeviceEventDto>> GetEventsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_accounts.TryGetValue(userId, out _))
+        {
+            return Task.FromResult<IReadOnlyList<DeviceEventDto>>([]);
+        }
+
+        if (!_eventsByImei.TryGetValue(imei, out List<StoredEvent>? events))
+        {
+            return Task.FromResult<IReadOnlyList<DeviceEventDto>>([]);
+        }
+
+        IReadOnlyList<DeviceEventDto> rows = events
+            .Where(x => x.ReceivedAtUtc >= fromUtc && x.ReceivedAtUtc <= toUtc)
+            .OrderByDescending(x => x.ReceivedAtUtc)
+            .ThenByDescending(x => x.EventId)
+            .Take(limit)
+            .Select(x => new DeviceEventDto(
+                x.EventId,
+                x.ReceivedAtUtc,
+                x.ReceivedAtUtc,
+                x.EventCode,
+                x.PayloadText,
+                x.Protocol,
+                x.MessageType,
+                x.PacketId,
+                x.SessionId))
+            .ToArray();
+
+        return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
     public Task<bool> SetUserPlanAsync(
         Guid userId,
         string planCode,
@@ -386,6 +544,88 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
         };
     }
 
+    private TelemetryDeviceSummaryDto BuildTelemetrySummary(UserDeviceBinding device, IReadOnlyList<SessionRecord> activeSessions)
+    {
+        StoredPosition? latestPosition = _positionsByImei.TryGetValue(device.Imei, out List<StoredPosition>? positions)
+            ? positions
+                .Where(x => x.Latitude.HasValue && x.Longitude.HasValue)
+                .OrderByDescending(x => x.OccurredAtUtc)
+                .ThenByDescending(x => x.ReceivedAtUtc)
+                .FirstOrDefault()
+            : null;
+
+        StoredPosition? latestPositionAny = _positionsByImei.TryGetValue(device.Imei, out positions)
+            ? positions
+                .OrderByDescending(x => x.ReceivedAtUtc)
+                .ThenByDescending(x => x.OccurredAtUtc)
+                .FirstOrDefault()
+            : null;
+
+        StoredEvent? latestEvent = _eventsByImei.TryGetValue(device.Imei, out List<StoredEvent>? events)
+            ? events
+                .OrderByDescending(x => x.ReceivedAtUtc)
+                .ThenByDescending(x => x.EventId)
+                .FirstOrDefault()
+            : null;
+
+        SessionRecord? activeSession = activeSessions
+            .Where(x => string.Equals(x.Imei, device.Imei, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.LastSeenAtUtc)
+            .ThenBy(x => x.SessionId.Value)
+            .FirstOrDefault();
+
+        DateTimeOffset? latestSeen = activeSession?.LastSeenAtUtc;
+        if (latestPositionAny is not null && (!latestSeen.HasValue || latestPositionAny.ReceivedAtUtc > latestSeen.Value))
+        {
+            latestSeen = latestPositionAny.ReceivedAtUtc;
+        }
+
+        if (latestEvent is not null && (!latestSeen.HasValue || latestEvent.ReceivedAtUtc > latestSeen.Value))
+        {
+            latestSeen = latestEvent.ReceivedAtUtc;
+        }
+
+        ProtocolId? protocol = null;
+        MessageType? messageType = null;
+        DateTimeOffset? latestMessageAtUtc = null;
+
+        if (latestPositionAny is not null)
+        {
+            latestMessageAtUtc = latestPositionAny.ReceivedAtUtc;
+            protocol = latestPositionAny.Protocol;
+            messageType = latestPositionAny.MessageType;
+        }
+
+        if (latestEvent is not null && (!latestMessageAtUtc.HasValue || latestEvent.ReceivedAtUtc > latestMessageAtUtc.Value))
+        {
+            latestMessageAtUtc = latestEvent.ReceivedAtUtc;
+            protocol = latestEvent.Protocol;
+            messageType = latestEvent.MessageType;
+        }
+
+        LastKnownPositionDto? lastPosition = latestPosition is null
+            ? null
+            : new LastKnownPositionDto(
+                latestPosition.OccurredAtUtc,
+                latestPosition.ReceivedAtUtc,
+                latestPosition.GpsTimeUtc,
+                latestPosition.Latitude!.Value,
+                latestPosition.Longitude!.Value,
+                latestPosition.SpeedKmh,
+                latestPosition.HeadingDeg,
+                latestPosition.PacketId,
+                latestPosition.SessionId);
+
+        return new TelemetryDeviceSummaryDto(
+            device.Imei,
+            device.BoundAtUtc,
+            latestSeen,
+            activeSession?.SessionId.Value,
+            protocol,
+            messageType,
+            lastPosition);
+    }
+
     private sealed class InMemoryUserAccount
     {
         public Guid UserId { get; set; }
@@ -404,4 +644,27 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
 
         public List<UserDeviceBinding> Devices { get; } = [];
     }
+
+    private sealed record StoredPosition(
+        Guid PacketId,
+        Guid SessionId,
+        ProtocolId Protocol,
+        MessageType MessageType,
+        DateTimeOffset OccurredAtUtc,
+        DateTimeOffset ReceivedAtUtc,
+        DateTimeOffset? GpsTimeUtc,
+        double? Latitude,
+        double? Longitude,
+        double? SpeedKmh,
+        int? HeadingDeg);
+
+    private sealed record StoredEvent(
+        Guid EventId,
+        Guid PacketId,
+        Guid SessionId,
+        ProtocolId Protocol,
+        MessageType MessageType,
+        string EventCode,
+        string PayloadText,
+        DateTimeOffset ReceivedAtUtc);
 }

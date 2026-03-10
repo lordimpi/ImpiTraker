@@ -17,7 +17,7 @@ namespace ImpiTrack.DataAccess.Repositories;
 /// <summary>
 /// Repositorio SQL con soporte para SQL Server y PostgreSQL.
 /// </summary>
-public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository
+public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository, ITelemetryQueryRepository
 {
     private const string DefaultPlanCode = "BASIC";
     private readonly IDbConnectionFactory _connectionFactory;
@@ -611,6 +611,92 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<TelemetryDeviceSummaryDto>> GetDeviceSummariesAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetTelemetryDeviceSummariesSql(_context.Provider),
+            new { UserId = userId },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<TelemetryDeviceSummaryRow> rows = await connection.QueryAsync<TelemetryDeviceSummaryRow>(command);
+        return rows.Select(ToTelemetryDeviceSummary).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> HasActiveDeviceBindingAsync(Guid userId, string imei, CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetHasActiveDeviceBindingSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim()
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int? result = await connection.ExecuteScalarAsync<int?>(command);
+        return result.HasValue;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<DevicePositionPointDto>> GetPositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetTelemetryPositionsSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim(),
+                FromUtc = fromUtc,
+                ToUtc = toUtc,
+                Limit = limit
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<TelemetryPositionRow> rows = await connection.QueryAsync<TelemetryPositionRow>(command);
+        return rows.Select(ToDevicePositionPoint).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<DeviceEventDto>> GetEventsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetTelemetryEventsSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim(),
+                FromUtc = fromUtc,
+                ToUtc = toUtc,
+                Limit = limit
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<TelemetryEventRow> rows = await connection.QueryAsync<TelemetryEventRow>(command);
+        return rows.Select(ToDeviceEvent).ToArray();
+    }
+
+    /// <inheritdoc />
     public async Task<bool> SetUserPlanAsync(
         Guid userId,
         string planCode,
@@ -752,6 +838,102 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
             row.AckPayload,
             row.AckAtUtc,
             row.AckLatencyMs);
+    }
+
+    private static TelemetryDeviceSummaryDto ToTelemetryDeviceSummary(TelemetryDeviceSummaryRow row)
+    {
+        LastKnownPositionDto? lastPosition = row.LastPositionPacketId.HasValue &&
+                                             row.LastPositionSessionId.HasValue &&
+                                             row.LastPositionLatitude.HasValue &&
+                                             row.LastPositionLongitude.HasValue &&
+                                             row.LastPositionOccurredAtUtc.HasValue &&
+                                             row.LastPositionReceivedAtUtc.HasValue
+            ? new LastKnownPositionDto(
+                row.LastPositionOccurredAtUtc.Value,
+                row.LastPositionReceivedAtUtc.Value,
+                row.LastPositionGpsTimeUtc,
+                row.LastPositionLatitude.Value,
+                row.LastPositionLongitude.Value,
+                row.LastPositionSpeedKmh,
+                row.LastPositionHeadingDeg,
+                row.LastPositionPacketId.Value,
+                row.LastPositionSessionId.Value)
+            : null;
+
+        return new TelemetryDeviceSummaryDto(
+            row.Imei,
+            row.BoundAtUtc,
+            row.LastSeenAtUtc,
+            row.ActiveSessionId,
+            ToNullableProtocolId(row.Protocol),
+            ToNullableMessageType(row.LastMessageType),
+            lastPosition);
+    }
+
+    private static DevicePositionPointDto ToDevicePositionPoint(TelemetryPositionRow row)
+    {
+        return new DevicePositionPointDto(
+            row.OccurredAtUtc,
+            row.ReceivedAtUtc,
+            row.GpsTimeUtc,
+            row.Latitude,
+            row.Longitude,
+            row.SpeedKmh,
+            row.HeadingDeg,
+            row.PacketId,
+            row.SessionId);
+    }
+
+    private static DeviceEventDto ToDeviceEvent(TelemetryEventRow row)
+    {
+        return new DeviceEventDto(
+            row.EventId,
+            row.OccurredAtUtc,
+            row.ReceivedAtUtc,
+            row.EventCode,
+            row.PayloadText,
+            ToProtocolId(row.Protocol),
+            ToMessageType(row.MessageType),
+            row.PacketId,
+            row.SessionId);
+    }
+
+    private static ProtocolId ToProtocolId(int value)
+    {
+        return Enum.IsDefined(typeof(ProtocolId), value)
+            ? (ProtocolId)value
+            : ProtocolId.Unknown;
+    }
+
+    private static ProtocolId? ToNullableProtocolId(int? value)
+    {
+        if (!value.HasValue)
+        {
+            return null;
+        }
+
+        return Enum.IsDefined(typeof(ProtocolId), value.Value)
+            ? (ProtocolId)value.Value
+            : null;
+    }
+
+    private static MessageType ToMessageType(int value)
+    {
+        return Enum.IsDefined(typeof(MessageType), value)
+            ? (MessageType)value
+            : MessageType.Unknown;
+    }
+
+    private static MessageType? ToNullableMessageType(int? value)
+    {
+        if (!value.HasValue)
+        {
+            return null;
+        }
+
+        return Enum.IsDefined(typeof(MessageType), value.Value)
+            ? (MessageType)value.Value
+            : null;
     }
 
     private static SessionRecord ToSessionRecord(SessionRow row)
@@ -1678,6 +1860,299 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         };
     }
 
+    private static string GetTelemetryDeviceSummariesSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    ud.imei AS Imei,
+                    ud.bound_at_utc AS BoundAtUtc,
+                    COALESCE(active_session.LastSeenAtUtc, latest_raw.ReceivedAtUtc, latest_position.ReceivedAtUtc, latest_event.ReceivedAtUtc) AS LastSeenAtUtc,
+                    active_session.SessionId AS ActiveSessionId,
+                    latest_raw.Protocol AS Protocol,
+                    latest_raw.MessageType AS LastMessageType,
+                    latest_position.OccurredAtUtc AS LastPositionOccurredAtUtc,
+                    latest_position.ReceivedAtUtc AS LastPositionReceivedAtUtc,
+                    latest_position.GpsTimeUtc AS LastPositionGpsTimeUtc,
+                    latest_position.Latitude AS LastPositionLatitude,
+                    latest_position.Longitude AS LastPositionLongitude,
+                    latest_position.SpeedKmh AS LastPositionSpeedKmh,
+                    latest_position.HeadingDeg AS LastPositionHeadingDeg,
+                    latest_position.PacketId AS LastPositionPacketId,
+                    latest_position.SessionId AS LastPositionSessionId
+                FROM user_devices ud
+                OUTER APPLY
+                (
+                    SELECT TOP 1
+                        session_id AS SessionId,
+                        last_seen_at_utc AS LastSeenAtUtc
+                    FROM device_sessions
+                    WHERE imei = ud.imei
+                      AND is_active = 1
+                    ORDER BY last_seen_at_utc DESC, session_id ASC
+                ) active_session
+                OUTER APPLY
+                (
+                    SELECT TOP 1
+                        protocol AS Protocol,
+                        message_type AS MessageType,
+                        received_at_utc AS ReceivedAtUtc
+                    FROM raw_packets
+                    WHERE imei = ud.imei
+                    ORDER BY received_at_utc DESC, packet_id DESC
+                ) latest_raw
+                OUTER APPLY
+                (
+                    SELECT TOP 1
+                        p.gps_time_utc AS OccurredAtUtc,
+                        rp.received_at_utc AS ReceivedAtUtc,
+                        p.gps_time_utc AS GpsTimeUtc,
+                        CAST(p.latitude AS FLOAT) AS Latitude,
+                        CAST(p.longitude AS FLOAT) AS Longitude,
+                        p.speed_kmh AS SpeedKmh,
+                        p.heading_deg AS HeadingDeg,
+                        p.packet_id AS PacketId,
+                        p.session_id AS SessionId
+                    FROM positions p
+                    INNER JOIN raw_packets rp
+                        ON rp.packet_id = p.packet_id
+                    WHERE p.imei = ud.imei
+                      AND p.latitude IS NOT NULL
+                      AND p.longitude IS NOT NULL
+                    ORDER BY p.gps_time_utc DESC, rp.received_at_utc DESC, p.position_id DESC
+                ) latest_position
+                OUTER APPLY
+                (
+                    SELECT TOP 1
+                        received_at_utc AS ReceivedAtUtc
+                    FROM device_events
+                    WHERE imei = ud.imei
+                    ORDER BY received_at_utc DESC, event_id DESC
+                ) latest_event
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = 1
+                ORDER BY ud.bound_at_utc DESC, ud.imei ASC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    ud.imei AS "Imei",
+                    ud.bound_at_utc AS "BoundAtUtc",
+                    COALESCE(active_session."LastSeenAtUtc", latest_raw."ReceivedAtUtc", latest_position."ReceivedAtUtc", latest_event."ReceivedAtUtc") AS "LastSeenAtUtc",
+                    active_session."SessionId" AS "ActiveSessionId",
+                    latest_raw."Protocol" AS "Protocol",
+                    latest_raw."MessageType" AS "LastMessageType",
+                    latest_position."OccurredAtUtc" AS "LastPositionOccurredAtUtc",
+                    latest_position."ReceivedAtUtc" AS "LastPositionReceivedAtUtc",
+                    latest_position."GpsTimeUtc" AS "LastPositionGpsTimeUtc",
+                    latest_position."Latitude" AS "LastPositionLatitude",
+                    latest_position."Longitude" AS "LastPositionLongitude",
+                    latest_position."SpeedKmh" AS "LastPositionSpeedKmh",
+                    latest_position."HeadingDeg" AS "LastPositionHeadingDeg",
+                    latest_position."PacketId" AS "LastPositionPacketId",
+                    latest_position."SessionId" AS "LastPositionSessionId"
+                FROM user_devices ud
+                LEFT JOIN LATERAL
+                (
+                    SELECT
+                        session_id AS "SessionId",
+                        last_seen_at_utc AS "LastSeenAtUtc"
+                    FROM device_sessions
+                    WHERE imei = ud.imei
+                      AND is_active = TRUE
+                    ORDER BY last_seen_at_utc DESC, session_id ASC
+                    LIMIT 1
+                ) active_session ON TRUE
+                LEFT JOIN LATERAL
+                (
+                    SELECT
+                        protocol AS "Protocol",
+                        message_type AS "MessageType",
+                        received_at_utc AS "ReceivedAtUtc"
+                    FROM raw_packets
+                    WHERE imei = ud.imei
+                    ORDER BY received_at_utc DESC, packet_id DESC
+                    LIMIT 1
+                ) latest_raw ON TRUE
+                LEFT JOIN LATERAL
+                (
+                    SELECT
+                        p.gps_time_utc AS "OccurredAtUtc",
+                        rp.received_at_utc AS "ReceivedAtUtc",
+                        p.gps_time_utc AS "GpsTimeUtc",
+                        p.latitude::DOUBLE PRECISION AS "Latitude",
+                        p.longitude::DOUBLE PRECISION AS "Longitude",
+                        p.speed_kmh AS "SpeedKmh",
+                        p.heading_deg AS "HeadingDeg",
+                        p.packet_id AS "PacketId",
+                        p.session_id AS "SessionId"
+                    FROM positions p
+                    INNER JOIN raw_packets rp
+                        ON rp.packet_id = p.packet_id
+                    WHERE p.imei = ud.imei
+                      AND p.latitude IS NOT NULL
+                      AND p.longitude IS NOT NULL
+                    ORDER BY p.gps_time_utc DESC, rp.received_at_utc DESC, p.position_id DESC
+                    LIMIT 1
+                ) latest_position ON TRUE
+                LEFT JOIN LATERAL
+                (
+                    SELECT
+                        received_at_utc AS "ReceivedAtUtc"
+                    FROM device_events
+                    WHERE imei = ud.imei
+                    ORDER BY received_at_utc DESC, event_id DESC
+                    LIMIT 1
+                ) latest_event ON TRUE
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = TRUE
+                ORDER BY ud.bound_at_utc DESC, ud.imei ASC;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetHasActiveDeviceBindingSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP 1 1
+                FROM user_devices
+                WHERE user_id = @UserId
+                  AND imei = @Imei
+                  AND is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT 1
+                FROM user_devices
+                WHERE user_id = @UserId
+                  AND imei = @Imei
+                  AND is_active = TRUE
+                LIMIT 1;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetTelemetryPositionsSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP (@Limit)
+                    p.gps_time_utc AS OccurredAtUtc,
+                    rp.received_at_utc AS ReceivedAtUtc,
+                    p.gps_time_utc AS GpsTimeUtc,
+                    CAST(p.latitude AS FLOAT) AS Latitude,
+                    CAST(p.longitude AS FLOAT) AS Longitude,
+                    p.speed_kmh AS SpeedKmh,
+                    p.heading_deg AS HeadingDeg,
+                    p.packet_id AS PacketId,
+                    p.session_id AS SessionId
+                FROM positions p
+                INNER JOIN raw_packets rp
+                    ON rp.packet_id = p.packet_id
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = 1
+                   AND ud.imei = p.imei
+                WHERE p.gps_time_utc >= @FromUtc
+                  AND p.gps_time_utc <= @ToUtc
+                  AND p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                ORDER BY p.gps_time_utc DESC, rp.received_at_utc DESC, p.position_id DESC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    p.gps_time_utc AS "OccurredAtUtc",
+                    rp.received_at_utc AS "ReceivedAtUtc",
+                    p.gps_time_utc AS "GpsTimeUtc",
+                    p.latitude::DOUBLE PRECISION AS "Latitude",
+                    p.longitude::DOUBLE PRECISION AS "Longitude",
+                    p.speed_kmh AS "SpeedKmh",
+                    p.heading_deg AS "HeadingDeg",
+                    p.packet_id AS "PacketId",
+                    p.session_id AS "SessionId"
+                FROM positions p
+                INNER JOIN raw_packets rp
+                    ON rp.packet_id = p.packet_id
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = TRUE
+                   AND ud.imei = p.imei
+                WHERE p.gps_time_utc >= @FromUtc
+                  AND p.gps_time_utc <= @ToUtc
+                  AND p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                ORDER BY p.gps_time_utc DESC, rp.received_at_utc DESC, p.position_id DESC
+                LIMIT @Limit;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetTelemetryEventsSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP (@Limit)
+                    ev.event_id AS EventId,
+                    ev.received_at_utc AS OccurredAtUtc,
+                    ev.received_at_utc AS ReceivedAtUtc,
+                    ev.event_code AS EventCode,
+                    ev.payload_text AS PayloadText,
+                    ev.protocol AS Protocol,
+                    ev.message_type AS MessageType,
+                    ev.packet_id AS PacketId,
+                    ev.session_id AS SessionId
+                FROM device_events ev
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = 1
+                   AND ud.imei = ev.imei
+                WHERE ev.received_at_utc >= @FromUtc
+                  AND ev.received_at_utc <= @ToUtc
+                ORDER BY ev.received_at_utc DESC, ev.event_id DESC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    ev.event_id AS "EventId",
+                    ev.received_at_utc AS "OccurredAtUtc",
+                    ev.received_at_utc AS "ReceivedAtUtc",
+                    ev.event_code AS "EventCode",
+                    ev.payload_text AS "PayloadText",
+                    ev.protocol AS "Protocol",
+                    ev.message_type AS "MessageType",
+                    ev.packet_id AS "PacketId",
+                    ev.session_id AS "SessionId"
+                FROM device_events ev
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = TRUE
+                   AND ud.imei = ev.imei
+                WHERE ev.received_at_utc >= @FromUtc
+                  AND ev.received_at_utc <= @ToUtc
+                ORDER BY ev.received_at_utc DESC, ev.event_id DESC
+                LIMIT @Limit;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
     private static string GetPlanIdByCodeSql(DatabaseProvider provider)
     {
         return provider switch
@@ -2109,6 +2584,81 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         public int MaxGps { get; set; }
 
         public bool IsActive { get; set; }
+    }
+
+    private sealed class TelemetryDeviceSummaryRow
+    {
+        public string Imei { get; set; } = string.Empty;
+
+        public DateTimeOffset BoundAtUtc { get; set; }
+
+        public DateTimeOffset? LastSeenAtUtc { get; set; }
+
+        public Guid? ActiveSessionId { get; set; }
+
+        public int? Protocol { get; set; }
+
+        public int? LastMessageType { get; set; }
+
+        public DateTimeOffset? LastPositionOccurredAtUtc { get; set; }
+
+        public DateTimeOffset? LastPositionReceivedAtUtc { get; set; }
+
+        public DateTimeOffset? LastPositionGpsTimeUtc { get; set; }
+
+        public double? LastPositionLatitude { get; set; }
+
+        public double? LastPositionLongitude { get; set; }
+
+        public double? LastPositionSpeedKmh { get; set; }
+
+        public int? LastPositionHeadingDeg { get; set; }
+
+        public Guid? LastPositionPacketId { get; set; }
+
+        public Guid? LastPositionSessionId { get; set; }
+    }
+
+    private sealed class TelemetryPositionRow
+    {
+        public DateTimeOffset OccurredAtUtc { get; set; }
+
+        public DateTimeOffset ReceivedAtUtc { get; set; }
+
+        public DateTimeOffset? GpsTimeUtc { get; set; }
+
+        public double Latitude { get; set; }
+
+        public double Longitude { get; set; }
+
+        public double? SpeedKmh { get; set; }
+
+        public int? HeadingDeg { get; set; }
+
+        public Guid PacketId { get; set; }
+
+        public Guid SessionId { get; set; }
+    }
+
+    private sealed class TelemetryEventRow
+    {
+        public Guid EventId { get; set; }
+
+        public DateTimeOffset OccurredAtUtc { get; set; }
+
+        public DateTimeOffset ReceivedAtUtc { get; set; }
+
+        public string EventCode { get; set; } = string.Empty;
+
+        public string PayloadText { get; set; } = string.Empty;
+
+        public int Protocol { get; set; }
+
+        public int MessageType { get; set; }
+
+        public Guid PacketId { get; set; }
+
+        public Guid SessionId { get; set; }
     }
 
     private sealed class UserSummaryRow

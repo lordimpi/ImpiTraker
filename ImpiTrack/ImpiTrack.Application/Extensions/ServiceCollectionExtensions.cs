@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddScoped<IMeAccountService, MeAccountService>();
         services.AddScoped<IAdminUsersService, AdminUsersService>();
+        services.AddScoped<ITelemetryQueryService, TelemetryQueryService>();
         return services;
     }
 }
