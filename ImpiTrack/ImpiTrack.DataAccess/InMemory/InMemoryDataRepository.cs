@@ -66,6 +66,11 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
         {
             if (envelope.Message.MessageType == MessageType.Tracking)
             {
+                if (!envelope.Message.IsTelemetryUsable)
+                {
+                    return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
+                }
+
                 List<StoredPosition> positions = _positionsByImei.GetOrAdd(imei, static _ => []);
                 positions.Add(new StoredPosition(
                     envelope.PacketId.Value,

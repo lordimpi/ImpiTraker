@@ -129,6 +129,11 @@ public sealed class InboundProcessingService : BackgroundService
             return;
         }
 
+        if (envelope.Message.MessageType == MessageType.Tracking && !envelope.Message.IsTelemetryUsable)
+        {
+            return;
+        }
+
         string imei = envelope.Message.Imei;
         string telemetryTopic = $"v1/telemetry/{imei}";
         string statusTopic = $"v1/status/{imei}";

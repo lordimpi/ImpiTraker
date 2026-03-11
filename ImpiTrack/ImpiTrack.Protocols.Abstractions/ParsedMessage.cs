@@ -14,6 +14,8 @@ namespace ImpiTrack.Protocols.Abstractions;
 /// <param name="Longitude">Longitud en grados decimales cuando aplica.</param>
 /// <param name="SpeedKmh">Velocidad en km/h cuando aplica.</param>
 /// <param name="HeadingDeg">Rumbo en grados cuando aplica.</param>
+/// <param name="IsTelemetryUsable">Indica si el mensaje puede derivarse de forma util a telemetria funcional.</param>
+/// <param name="TelemetryError">Codigo corto de error cuando un tracking no es util para telemetria.</param>
 public sealed record ParsedMessage(
     ProtocolId Protocol,
     MessageType MessageType,
@@ -25,4 +27,6 @@ public sealed record ParsedMessage(
     double? Latitude = null,
     double? Longitude = null,
     double? SpeedKmh = null,
-    int? HeadingDeg = null);
+    int? HeadingDeg = null,
+    bool IsTelemetryUsable = true,
+    string? TelemetryError = null);

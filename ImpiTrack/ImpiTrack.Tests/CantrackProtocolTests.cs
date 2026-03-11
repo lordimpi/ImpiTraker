@@ -54,6 +54,8 @@ public sealed class CantrackProtocolTests
         Assert.NotNull(message);
         Assert.Equal(MessageType.Tracking, message!.MessageType);
         Assert.Equal("359586015829802", message.Imei);
+        Assert.True(message.IsTelemetryUsable);
+        Assert.Null(message.TelemetryError);
         Assert.NotNull(message.GpsTimeUtc);
         Assert.Equal(new DateTimeOffset(2025, 3, 1, 12, 30, 45, TimeSpan.Zero), message.GpsTimeUtc!.Value);
         Assert.NotNull(message.Latitude);
@@ -62,5 +64,24 @@ public sealed class CantrackProtocolTests
         Assert.Equal(113.902057d, message.Longitude!.Value, 6);
         Assert.Equal(60d, message.SpeedKmh!.Value, 6);
         Assert.Equal(180, message.HeadingDeg!.Value);
+    }
+
+    [Fact]
+    public void CantrackTrackingInvalid_ShouldRemainTrackingButMarkTelemetryAsInvalid()
+    {
+        var parser = new CantrackProtocolParser();
+        string payload = "*HQ,359586015829802,V1,250301,123045,A,2234.1234,Q,11354.1234,E,60,180#";
+        var frame = new Frame(Encoding.ASCII.GetBytes(payload), DateTimeOffset.UtcNow);
+
+        bool parsedOk = parser.TryParse(frame, out ParsedMessage? message, out string? error);
+
+        Assert.True(parsedOk);
+        Assert.Null(error);
+        Assert.NotNull(message);
+        Assert.Equal(MessageType.Tracking, message!.MessageType);
+        Assert.False(message.IsTelemetryUsable);
+        Assert.Equal("invalid_hemisphere", message.TelemetryError);
+        Assert.Null(message.Latitude);
+        Assert.Null(message.Longitude);
     }
 }

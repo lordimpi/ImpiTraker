@@ -313,7 +313,8 @@ public sealed class Worker : BackgroundService
                         }
 
                         _abuseGuard.RegisterFrame(remoteIp, isInvalid: false, DateTimeOffset.UtcNow);
-                        _tcpMetrics.RecordParseResult(endpoint.Port, parsed.Protocol, success: true);
+                        bool telemetryUsable = parsed.MessageType != MessageType.Tracking || parsed.IsTelemetryUsable;
+                        _tcpMetrics.RecordParseResult(endpoint.Port, parsed.Protocol, success: telemetryUsable);
 
                         _sessionManager.AttachImei(session.SessionId, parsed.Imei);
                         if (parsed.MessageType == MessageType.Heartbeat)
@@ -348,7 +349,10 @@ public sealed class Worker : BackgroundService
                                 ackLatencyMs);
                         }
 
-                        bool rawQueuedParseOk = await TryAddRawPacketAsync(
+                        RawParseStatus rawParseStatus = telemetryUsable ? RawParseStatus.Ok : RawParseStatus.Failed;
+                        string? rawParseError = telemetryUsable ? null : parsed.TelemetryError ?? "invalid_tracking_payload";
+
+                        bool rawQueuedParseResult = await TryAddRawPacketAsync(
                             new RawPacketRecord(
                                 session.SessionId,
                                 packetId,
@@ -359,19 +363,42 @@ public sealed class Worker : BackgroundService
                                 parsed.MessageType,
                                 parsed.Text,
                                 parsed.ReceivedAtUtc,
-                                RawParseStatus.Ok,
-                                null,
+                                rawParseStatus,
+                                rawParseError,
                                 ackSent,
                                 ackPayload,
                                 ackAtUtc,
                                 ackLatencyMs),
                             _inboundQueue.Backlog,
-                            "parse_ok",
+                            telemetryUsable ? "parse_ok" : "tracking_invalid",
                             serverToken);
-                        if (!rawQueuedParseOk && _rawPacketQueue.FullMode == RawQueueFullMode.Disconnect)
+                        if (!rawQueuedParseResult && _rawPacketQueue.FullMode == RawQueueFullMode.Disconnect)
                         {
                             disconnectRequested = true;
                             break;
+                        }
+
+                        if (!telemetryUsable)
+                        {
+                            _logger.LogWarning(
+                                "tracking_invalid_for_telemetry sessionId={sessionId} packetId={packetId} protocol={protocol} imei={imei} port={port} error={error}",
+                                session.SessionId,
+                                packetId,
+                                parsed.Protocol,
+                                parsed.Imei ?? "n/a",
+                                endpoint.Port,
+                                rawParseError);
+
+                            if (_sessionManager.TryGet(session.SessionId, out SessionState? currentSessionInvalid) &&
+                                currentSessionInvalid is not null)
+                            {
+                                await TryUpsertSessionAsync(
+                                    ToSessionRecord(currentSessionInvalid, isActive: true),
+                                    "session_progress_snapshot",
+                                    serverToken);
+                            }
+
+                            continue;
                         }
 
                         await _inboundQueue.EnqueueAsync(

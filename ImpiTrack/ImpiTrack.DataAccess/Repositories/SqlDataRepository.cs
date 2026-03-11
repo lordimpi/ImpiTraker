@@ -147,6 +147,13 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 return new PersistEnvelopeResult(PersistEnvelopeStatus.SkippedUnownedDevice);
             }
 
+            RawParseStatus rawParseStatus = envelope.Message.MessageType == MessageType.Tracking && !envelope.Message.IsTelemetryUsable
+                ? RawParseStatus.Failed
+                : RawParseStatus.Ok;
+            string? rawParseError = rawParseStatus == RawParseStatus.Ok
+                ? null
+                : envelope.Message.TelemetryError ?? "invalid_tracking_payload";
+
             await UpsertRawPacketAsync(
                 connection,
                 transaction,
@@ -160,8 +167,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     envelope.Message.MessageType,
                     envelope.Message.Text,
                     envelope.Message.ReceivedAtUtc,
-                    RawParseStatus.Ok,
-                    null,
+                    rawParseStatus,
+                    rawParseError,
                     false,
                     null,
                     null,
@@ -172,6 +179,12 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
 
             if (envelope.Message.MessageType == MessageType.Tracking)
             {
+                if (!envelope.Message.IsTelemetryUsable)
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                    return new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted);
+                }
+
                 string dedupeKey = BuildTrackingDedupeKey(envelope);
                 CommandDefinition insertPosition = new(
                     GetInsertPositionSql(_context.Provider),

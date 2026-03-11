@@ -79,7 +79,43 @@ public sealed class ApiOpsAuthTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    private static WebApplicationFactory<Program> CreateFactory()
+    [Fact]
+    public async Task OpsRawLatest_ShouldExposeFailedTrackingParseDetails()
+    {
+        RawPacketRecord rawRecord = new(
+            SessionId.New(),
+            PacketId.New(),
+            5001,
+            "127.0.0.1",
+            ProtocolId.Coban,
+            "359586015829802",
+            MessageType.Tracking,
+            "imei:359586015829802,tracker,250208125816,,F,175816.000,A,028,N,07634.01441,W,,;",
+            DateTimeOffset.UtcNow,
+            RawParseStatus.Failed,
+            "invalid_latitude",
+            true,
+            "ON\r\n",
+            DateTimeOffset.UtcNow,
+            1.2d);
+
+        await using var factory = CreateFactory([rawRecord]);
+        using HttpClient client = factory.CreateClient();
+        string token = CreateToken(includeAdminRole: true);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        HttpResponseMessage response = await client.GetAsync("/api/ops/raw/latest?imei=359586015829802&limit=10");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument json = await ReadJsonAsync(response);
+        JsonElement item = json.RootElement.GetProperty("data")[0];
+        Assert.Equal((int)MessageType.Tracking, item.GetProperty("messageType").GetInt32());
+        Assert.Equal((int)RawParseStatus.Failed, item.GetProperty("parseStatus").GetInt32());
+        Assert.Equal("invalid_latitude", item.GetProperty("parseError").GetString());
+        Assert.True(item.GetProperty("ackSent").GetBoolean());
+    }
+
+    private static WebApplicationFactory<Program> CreateFactory(IReadOnlyList<RawPacketRecord>? rawPackets = null)
     {
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
@@ -105,7 +141,8 @@ public sealed class ApiOpsAuthTests
                 services.RemoveAll<IOpsRepository>();
                 services.RemoveAll<IIngestionRepository>();
                 var store = new InMemoryOpsDataStore();
-                store.AddRawPacket(
+                IReadOnlyList<RawPacketRecord> seedPackets = rawPackets ??
+                [
                     new RawPacketRecord(
                         SessionId.New(),
                         PacketId.New(),
@@ -121,8 +158,13 @@ public sealed class ApiOpsAuthTests
                         true,
                         "LOAD",
                         DateTimeOffset.UtcNow,
-                        5),
-                    backlog: 0);
+                        5)
+                ];
+
+                foreach (RawPacketRecord packet in seedPackets)
+                {
+                    store.AddRawPacket(packet, backlog: 0);
+                }
 
                 var repository = new InMemoryDataRepository(store);
                 services.AddSingleton<IOpsRepository>(repository);
