@@ -134,6 +134,89 @@ public sealed class MeTelemetryController : ControllerBase
         };
     }
 
+    /// <summary>
+    /// Obtiene recorridos vehiculares construidos desde la telemetria historica de un IMEI propio.
+    /// </summary>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="from">Inicio UTC opcional del rango.</param>
+    /// <param name="to">Fin UTC opcional del rango.</param>
+    /// <param name="limit">Cantidad maxima opcional de recorridos.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>Lista de recorridos construidos para el dispositivo.</returns>
+    [HttpGet("devices/{imei}/trips")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<TripSummaryDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<TripSummaryDto>>), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<TripSummaryDto>>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<TripSummaryDto>>>> GetTrips(
+        [FromRoute] string imei,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        [FromQuery] int? limit,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUserId(out Guid userId))
+        {
+            return UnauthorizedEnvelope<IReadOnlyList<TripSummaryDto>>();
+        }
+
+        TelemetryLookupResult<IReadOnlyList<TripSummaryDto>> result = await _telemetryQueryService.GetTripsAsync(
+            userId,
+            imei,
+            from,
+            to,
+            limit,
+            cancellationToken);
+
+        return result.Status switch
+        {
+            TelemetryLookupStatus.Success => this.OkEnvelope(result.Data ?? []),
+            TelemetryLookupStatus.DeviceBindingNotFound => DeviceBindingNotFoundEnvelope<IReadOnlyList<TripSummaryDto>>(),
+            _ => UnauthorizedEnvelope<IReadOnlyList<TripSummaryDto>>()
+        };
+    }
+
+    /// <summary>
+    /// Obtiene el detalle de un recorrido vehicular de un IMEI propio.
+    /// </summary>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="tripId">Identificador deterministico del recorrido.</param>
+    /// <param name="from">Inicio UTC opcional del rango.</param>
+    /// <param name="to">Fin UTC opcional del rango.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>Detalle del recorrido solicitado.</returns>
+    [HttpGet("devices/{imei}/trips/{tripId}")]
+    [ProducesResponseType(typeof(ApiResponse<TripDetailDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<TripDetailDto>), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiResponse<TripDetailDto>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<TripDetailDto>>> GetTripById(
+        [FromRoute] string imei,
+        [FromRoute] string tripId,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUserId(out Guid userId))
+        {
+            return UnauthorizedEnvelope<TripDetailDto>();
+        }
+
+        TelemetryLookupResult<TripDetailDto> result = await _telemetryQueryService.GetTripByIdAsync(
+            userId,
+            imei,
+            tripId,
+            from,
+            to,
+            cancellationToken);
+
+        return result.Status switch
+        {
+            TelemetryLookupStatus.Success => this.OkEnvelope(result.Data!),
+            TelemetryLookupStatus.DeviceBindingNotFound => DeviceBindingNotFoundEnvelope<TripDetailDto>(),
+            TelemetryLookupStatus.TripNotFound => TripNotFoundEnvelope<TripDetailDto>(),
+            _ => UnauthorizedEnvelope<TripDetailDto>()
+        };
+    }
+
     private bool TryGetCurrentUserId(out Guid userId)
     {
         string? rawId =
@@ -158,5 +241,13 @@ public sealed class MeTelemetryController : ControllerBase
             StatusCodes.Status404NotFound,
             "device_binding_not_found",
             "No existe un vinculo activo para el IMEI indicado.");
+    }
+
+    private ActionResult<ApiResponse<T>> TripNotFoundEnvelope<T>()
+    {
+        return this.FailEnvelope<T>(
+            StatusCodes.Status404NotFound,
+            "trip_not_found",
+            "No existe el recorrido solicitado para el IMEI indicado.");
     }
 }

@@ -453,6 +453,50 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
+    public Task<IReadOnlyList<DevicePositionPointDto>> GetTripCandidatePositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int maxPoints,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_accounts.TryGetValue(userId, out _))
+        {
+            return Task.FromResult<IReadOnlyList<DevicePositionPointDto>>([]);
+        }
+
+        if (!_positionsByImei.TryGetValue(imei, out List<StoredPosition>? positions))
+        {
+            return Task.FromResult<IReadOnlyList<DevicePositionPointDto>>([]);
+        }
+
+        IReadOnlyList<DevicePositionPointDto> rows = positions
+            .Where(x =>
+                x.Latitude.HasValue &&
+                x.Longitude.HasValue &&
+                x.OccurredAtUtc >= fromUtc &&
+                x.OccurredAtUtc <= toUtc)
+            .OrderBy(x => x.OccurredAtUtc)
+            .ThenBy(x => x.ReceivedAtUtc)
+            .Take(maxPoints)
+            .Select(x => new DevicePositionPointDto(
+                x.OccurredAtUtc,
+                x.ReceivedAtUtc,
+                x.GpsTimeUtc,
+                x.Latitude!.Value,
+                x.Longitude!.Value,
+                x.SpeedKmh,
+                x.HeadingDeg,
+                x.PacketId,
+                x.SessionId))
+            .ToArray();
+
+        return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
     public Task<bool> SetUserPlanAsync(
         Guid userId,
         string planCode,

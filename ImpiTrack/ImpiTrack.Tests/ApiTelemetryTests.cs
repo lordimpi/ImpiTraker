@@ -195,6 +195,144 @@ public sealed class ApiTelemetryTests
         Assert.Equal("user_not_found", wrongUserBody.RootElement.GetProperty("error").GetProperty("code").GetString());
     }
 
+    [Fact]
+    public async Task MeTelemetryTrips_ShouldReturnSegmentedTripsAndDetail()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyLoginAndBindAsync(
+            client,
+            "trips.user",
+            "trips.user@imptrack.local",
+            "300100200300400");
+
+        DateTimeOffset baseUtc = DateTimeOffset.UtcNow.AddHours(-3);
+        await SeedTrackingAsync(factory, "300100200300400", baseUtc.AddMinutes(0), baseUtc.AddMinutes(0), 4.6000, -74.1000, 12, 0);
+        await SeedTrackingAsync(factory, "300100200300400", baseUtc.AddMinutes(3), baseUtc.AddMinutes(3), 4.6200, -74.1200, 18, 45);
+        await SeedTrackingAsync(factory, "300100200300400", baseUtc.AddMinutes(20), baseUtc.AddMinutes(20), 4.7000, -74.0000, 22, 90);
+        await SeedTrackingAsync(factory, "300100200300400", baseUtc.AddMinutes(24), baseUtc.AddMinutes(24), 4.7400, -73.9600, 28, 120);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+
+        string from = Uri.EscapeDataString(baseUtc.AddMinutes(-5).ToString("O"));
+        string to = Uri.EscapeDataString(baseUtc.AddMinutes(40).ToString("O"));
+        HttpResponseMessage tripsResponse = await client.GetAsync(
+            $"/api/me/telemetry/devices/300100200300400/trips?from={from}&to={to}&limit=10");
+
+        Assert.Equal(HttpStatusCode.OK, tripsResponse.StatusCode);
+        ApiEnvelope<List<TripSummaryResponse>>? tripsPayload =
+            await tripsResponse.Content.ReadFromJsonAsync<ApiEnvelope<List<TripSummaryResponse>>>();
+        Assert.NotNull(tripsPayload);
+        Assert.True(tripsPayload!.Success);
+        Assert.NotNull(tripsPayload.Data);
+        Assert.Equal(2, tripsPayload.Data!.Count);
+        Assert.True(tripsPayload.Data[0].StartedAtUtc > tripsPayload.Data[1].StartedAtUtc);
+        Assert.All(tripsPayload.Data, trip => Assert.True(trip.PointCount >= 2));
+
+        string tripId = tripsPayload.Data[0].TripId;
+        HttpResponseMessage detailResponse = await client.GetAsync(
+            $"/api/me/telemetry/devices/300100200300400/trips/{tripId}?from={from}&to={to}");
+
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        ApiEnvelope<TripDetailResponse>? detailPayload =
+            await detailResponse.Content.ReadFromJsonAsync<ApiEnvelope<TripDetailResponse>>();
+        Assert.NotNull(detailPayload);
+        Assert.True(detailPayload!.Success);
+        Assert.NotNull(detailPayload.Data);
+        Assert.Equal(tripId, detailPayload.Data!.TripId);
+        Assert.Equal("movement_gap_v1", detailPayload.Data.SourceRule);
+        Assert.True(detailPayload.Data.PathPoints.Count >= 2);
+    }
+
+    [Fact]
+    public async Task MeTelemetryTrips_ShouldReturnOpenTrip_WhenTripIsInProgress()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyLoginAndBindAsync(
+            client,
+            "trips.open.user",
+            "trips.open.user@imptrack.local",
+            "300100200300401");
+
+        DateTimeOffset nowUtc = DateTimeOffset.UtcNow;
+        await SeedTrackingAsync(factory, "300100200300401", nowUtc.AddMinutes(-8), nowUtc.AddMinutes(-8), 4.5000, -74.0500, 25, 0);
+        await SeedTrackingAsync(factory, "300100200300401", nowUtc.AddMinutes(-3), nowUtc.AddMinutes(-3), 4.5200, -74.0300, 30, 25);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+
+        HttpResponseMessage response = await client.GetAsync("/api/me/telemetry/devices/300100200300401/trips?limit=10");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ApiEnvelope<List<TripSummaryResponse>>? payload =
+            await response.Content.ReadFromJsonAsync<ApiEnvelope<List<TripSummaryResponse>>>();
+        Assert.NotNull(payload);
+        TripSummaryResponse trip = Assert.Single(payload!.Data!);
+        Assert.Null(trip.EndedAtUtc);
+    }
+
+    [Fact]
+    public async Task MeTelemetryTripDetail_ShouldReturnNotFound_WhenTripDoesNotExist()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyLoginAndBindAsync(
+            client,
+            "trips.missing.user",
+            "trips.missing.user@imptrack.local",
+            "300100200300402");
+
+        DateTimeOffset baseUtc = DateTimeOffset.UtcNow.AddHours(-2);
+        await SeedTrackingAsync(factory, "300100200300402", baseUtc, baseUtc, 4.6000, -74.1000, 12, 0);
+        await SeedTrackingAsync(factory, "300100200300402", baseUtc.AddMinutes(2), baseUtc.AddMinutes(2), 4.6100, -74.1100, 15, 10);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+
+        HttpResponseMessage response = await client.GetAsync("/api/me/telemetry/devices/300100200300402/trips/does-not-exist");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using JsonDocument body = await ReadJsonAsync(response);
+        Assert.Equal("trip_not_found", body.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task AdminTelemetryTrips_ShouldUseUserContext()
+    {
+        await using var factory = CreateFactory(seedAdminOnStart: true);
+        using HttpClient targetClient = factory.CreateClient();
+        using HttpClient adminClient = factory.CreateClient();
+
+        Guid targetUserId = await RegisterVerifyAndBindAsync(
+            targetClient,
+            "admin.trips.target",
+            "admin.trips.target@imptrack.local",
+            "300100200300403");
+
+        DateTimeOffset baseUtc = DateTimeOffset.UtcNow.AddHours(-1);
+        await SeedTrackingAsync(factory, "300100200300403", baseUtc, baseUtc, 6.2000, -75.5000, 20, 0);
+        await SeedTrackingAsync(factory, "300100200300403", baseUtc.AddMinutes(3), baseUtc.AddMinutes(3), 6.2100, -75.4900, 24, 15);
+
+        AuthTokenPairResponse adminToken = await LoginAsAdminAsync(adminClient);
+        adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.AccessToken);
+
+        HttpResponseMessage response = await adminClient.GetAsync($"/api/admin/users/{targetUserId:D}/telemetry/devices/300100200300403/trips");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ApiEnvelope<List<TripSummaryResponse>>? payload =
+            await response.Content.ReadFromJsonAsync<ApiEnvelope<List<TripSummaryResponse>>>();
+        Assert.NotNull(payload);
+        Assert.Single(payload!.Data!);
+
+        HttpResponseMessage wrongUserResponse = await adminClient.GetAsync(
+            $"/api/admin/users/{Guid.NewGuid():D}/telemetry/devices/300100200300403/trips");
+        Assert.Equal(HttpStatusCode.NotFound, wrongUserResponse.StatusCode);
+        using JsonDocument wrongUserBody = await ReadJsonAsync(wrongUserResponse);
+        Assert.Equal("user_not_found", wrongUserBody.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
     private static WebApplicationFactory<Program> CreateFactory(
         bool seedAdminOnStart = false,
         string environmentName = "Testing")
@@ -607,6 +745,52 @@ public sealed class ApiTelemetryTests
         public Guid PacketId { get; set; }
 
         public Guid SessionId { get; set; }
+    }
+
+    private sealed class TripSummaryResponse
+    {
+        public string TripId { get; set; } = string.Empty;
+
+        public string Imei { get; set; } = string.Empty;
+
+        public DateTimeOffset StartedAtUtc { get; set; }
+
+        public DateTimeOffset? EndedAtUtc { get; set; }
+
+        public int PointCount { get; set; }
+
+        public double? MaxSpeedKmh { get; set; }
+
+        public double? AvgSpeedKmh { get; set; }
+
+        public DevicePositionPointResponse? StartPosition { get; set; }
+
+        public DevicePositionPointResponse? EndPosition { get; set; }
+    }
+
+    private sealed class TripDetailResponse
+    {
+        public string TripId { get; set; } = string.Empty;
+
+        public string Imei { get; set; } = string.Empty;
+
+        public DateTimeOffset StartedAtUtc { get; set; }
+
+        public DateTimeOffset? EndedAtUtc { get; set; }
+
+        public int PointCount { get; set; }
+
+        public double? MaxSpeedKmh { get; set; }
+
+        public double? AvgSpeedKmh { get; set; }
+
+        public List<DevicePositionPointResponse> PathPoints { get; set; } = [];
+
+        public DevicePositionPointResponse? StartPosition { get; set; }
+
+        public DevicePositionPointResponse? EndPosition { get; set; }
+
+        public string SourceRule { get; set; } = string.Empty;
     }
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response)

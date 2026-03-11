@@ -122,6 +122,81 @@ public sealed class AdminUserTelemetryController : ControllerBase
         };
     }
 
+    /// <summary>
+    /// Obtiene recorridos vehiculares construidos desde la telemetria historica del IMEI indicado.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario objetivo.</param>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="from">Inicio UTC opcional del rango.</param>
+    /// <param name="to">Fin UTC opcional del rango.</param>
+    /// <param name="limit">Cantidad maxima opcional de recorridos.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>Lista de recorridos construidos para el dispositivo.</returns>
+    [HttpGet("devices/{imei}/trips")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<TripSummaryDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<TripSummaryDto>>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<TripSummaryDto>>>> GetTrips(
+        [FromRoute] Guid userId,
+        [FromRoute] string imei,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        [FromQuery] int? limit,
+        CancellationToken cancellationToken)
+    {
+        TelemetryLookupResult<IReadOnlyList<TripSummaryDto>> result = await _telemetryQueryService.GetTripsAsync(
+            userId,
+            imei,
+            from,
+            to,
+            limit,
+            cancellationToken);
+
+        return result.Status switch
+        {
+            TelemetryLookupStatus.Success => this.OkEnvelope(result.Data ?? []),
+            TelemetryLookupStatus.DeviceBindingNotFound => DeviceBindingNotFoundEnvelope<IReadOnlyList<TripSummaryDto>>(),
+            _ => UserNotFoundEnvelope<IReadOnlyList<TripSummaryDto>>()
+        };
+    }
+
+    /// <summary>
+    /// Obtiene el detalle completo de un recorrido vehicular del IMEI indicado.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario objetivo.</param>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="tripId">Identificador deterministico del recorrido.</param>
+    /// <param name="from">Inicio UTC opcional del rango.</param>
+    /// <param name="to">Fin UTC opcional del rango.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>Detalle del recorrido solicitado.</returns>
+    [HttpGet("devices/{imei}/trips/{tripId}")]
+    [ProducesResponseType(typeof(ApiResponse<TripDetailDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<TripDetailDto>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<TripDetailDto>>> GetTripById(
+        [FromRoute] Guid userId,
+        [FromRoute] string imei,
+        [FromRoute] string tripId,
+        [FromQuery] DateTimeOffset? from,
+        [FromQuery] DateTimeOffset? to,
+        CancellationToken cancellationToken)
+    {
+        TelemetryLookupResult<TripDetailDto> result = await _telemetryQueryService.GetTripByIdAsync(
+            userId,
+            imei,
+            tripId,
+            from,
+            to,
+            cancellationToken);
+
+        return result.Status switch
+        {
+            TelemetryLookupStatus.Success => this.OkEnvelope(result.Data!),
+            TelemetryLookupStatus.DeviceBindingNotFound => DeviceBindingNotFoundEnvelope<TripDetailDto>(),
+            TelemetryLookupStatus.TripNotFound => TripNotFoundEnvelope<TripDetailDto>(),
+            _ => UserNotFoundEnvelope<TripDetailDto>()
+        };
+    }
+
     private ActionResult<ApiResponse<T>> UserNotFoundEnvelope<T>()
     {
         return this.FailEnvelope<T>(
@@ -136,5 +211,13 @@ public sealed class AdminUserTelemetryController : ControllerBase
             StatusCodes.Status404NotFound,
             "device_binding_not_found",
             "No existe un vinculo activo para el IMEI indicado.");
+    }
+
+    private ActionResult<ApiResponse<T>> TripNotFoundEnvelope<T>()
+    {
+        return this.FailEnvelope<T>(
+            StatusCodes.Status404NotFound,
+            "trip_not_found",
+            "No existe el recorrido solicitado para el IMEI indicado.");
     }
 }

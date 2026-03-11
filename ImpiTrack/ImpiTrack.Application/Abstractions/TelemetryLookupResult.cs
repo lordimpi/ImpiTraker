@@ -18,7 +18,12 @@ public enum TelemetryLookupStatus
     /// <summary>
     /// El IMEI no tiene un vinculo activo para el usuario objetivo.
     /// </summary>
-    DeviceBindingNotFound = 3
+    DeviceBindingNotFound = 3,
+
+    /// <summary>
+    /// El recorrido solicitado no existe dentro del contexto consultado.
+    /// </summary>
+    TripNotFound = 4
 }
 
 /// <summary>

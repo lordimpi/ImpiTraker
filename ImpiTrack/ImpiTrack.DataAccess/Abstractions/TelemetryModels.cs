@@ -89,3 +89,53 @@ public sealed record DeviceEventDto(
     MessageType MessageType,
     Guid PacketId,
     Guid SessionId);
+
+/// <summary>
+/// Resumen legible de un recorrido vehicular construido desde telemetria historica.
+/// </summary>
+/// <param name="TripId">Identificador deterministico del recorrido.</param>
+/// <param name="Imei">IMEI del dispositivo.</param>
+/// <param name="StartedAtUtc">Fecha UTC de inicio del recorrido.</param>
+/// <param name="EndedAtUtc">Fecha UTC de fin del recorrido cuando existe.</param>
+/// <param name="PointCount">Cantidad de puntos usados para construir el recorrido.</param>
+/// <param name="MaxSpeedKmh">Velocidad maxima observada en km/h cuando existe.</param>
+/// <param name="AvgSpeedKmh">Velocidad promedio observada en km/h cuando existe.</param>
+/// <param name="StartPosition">Primer punto del recorrido.</param>
+/// <param name="EndPosition">Ultimo punto del recorrido.</param>
+public sealed record TripSummaryDto(
+    string TripId,
+    string Imei,
+    DateTimeOffset StartedAtUtc,
+    DateTimeOffset? EndedAtUtc,
+    int PointCount,
+    double? MaxSpeedKmh,
+    double? AvgSpeedKmh,
+    DevicePositionPointDto StartPosition,
+    DevicePositionPointDto EndPosition);
+
+/// <summary>
+/// Detalle completo de un recorrido vehicular construido desde telemetria historica.
+/// </summary>
+/// <param name="TripId">Identificador deterministico del recorrido.</param>
+/// <param name="Imei">IMEI del dispositivo.</param>
+/// <param name="StartedAtUtc">Fecha UTC de inicio del recorrido.</param>
+/// <param name="EndedAtUtc">Fecha UTC de fin del recorrido cuando existe.</param>
+/// <param name="PointCount">Cantidad de puntos usados para construir el recorrido.</param>
+/// <param name="MaxSpeedKmh">Velocidad maxima observada en km/h cuando existe.</param>
+/// <param name="AvgSpeedKmh">Velocidad promedio observada en km/h cuando existe.</param>
+/// <param name="PathPoints">Puntos completos del recorrido.</param>
+/// <param name="StartPosition">Primer punto del recorrido.</param>
+/// <param name="EndPosition">Ultimo punto del recorrido.</param>
+/// <param name="SourceRule">Regla usada para construir el recorrido.</param>
+public sealed record TripDetailDto(
+    string TripId,
+    string Imei,
+    DateTimeOffset StartedAtUtc,
+    DateTimeOffset? EndedAtUtc,
+    int PointCount,
+    double? MaxSpeedKmh,
+    double? AvgSpeedKmh,
+    IReadOnlyList<DevicePositionPointDto> PathPoints,
+    DevicePositionPointDto StartPosition,
+    DevicePositionPointDto EndPosition,
+    string SourceRule);

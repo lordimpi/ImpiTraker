@@ -50,4 +50,40 @@ public interface ITelemetryQueryService
         DateTimeOffset? toUtc,
         int? limit,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene recorridos vehiculares construidos desde la telemetria de un dispositivo.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario objetivo.</param>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="fromUtc">Inicio UTC opcional.</param>
+    /// <param name="toUtc">Fin UTC opcional.</param>
+    /// <param name="limit">Cantidad maxima opcional de recorridos.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Resultado con estado y recorridos encontrados.</returns>
+    Task<TelemetryLookupResult<IReadOnlyList<TripSummaryDto>>> GetTripsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset? fromUtc,
+        DateTimeOffset? toUtc,
+        int? limit,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene el detalle completo de un recorrido vehicular.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario objetivo.</param>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="tripId">Identificador deterministico del recorrido.</param>
+    /// <param name="fromUtc">Inicio UTC opcional.</param>
+    /// <param name="toUtc">Fin UTC opcional.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Resultado con estado y detalle del recorrido.</returns>
+    Task<TelemetryLookupResult<TripDetailDto>> GetTripByIdAsync(
+        Guid userId,
+        string imei,
+        string tripId,
+        DateTimeOffset? fromUtc,
+        DateTimeOffset? toUtc,
+        CancellationToken cancellationToken);
 }

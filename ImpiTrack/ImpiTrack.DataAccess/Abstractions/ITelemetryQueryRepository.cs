@@ -57,4 +57,22 @@ public interface ITelemetryQueryRepository
         DateTimeOffset toUtc,
         int limit,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene puntos candidatos para construir recorridos vehiculares dentro de una ventana temporal.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario propietario.</param>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="fromUtc">Inicio UTC del rango.</param>
+    /// <param name="toUtc">Fin UTC del rango.</param>
+    /// <param name="maxPoints">Cantidad maxima de puntos candidatos.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Secuencia ascendente de puntos validos para segmentar recorridos.</returns>
+    Task<IReadOnlyList<DevicePositionPointDto>> GetTripCandidatePositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int maxPoints,
+        CancellationToken cancellationToken);
 }

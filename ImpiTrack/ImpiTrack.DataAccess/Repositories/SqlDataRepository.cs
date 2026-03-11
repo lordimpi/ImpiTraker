@@ -710,6 +710,33 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<DevicePositionPointDto>> GetTripCandidatePositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int maxPoints,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetTelemetryTripCandidatesSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim(),
+                FromUtc = fromUtc,
+                ToUtc = toUtc,
+                MaxPoints = maxPoints
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<TelemetryPositionRow> rows = await connection.QueryAsync<TelemetryPositionRow>(command);
+        return rows.Select(ToDevicePositionPoint).ToArray();
+    }
+
+    /// <inheritdoc />
     public async Task<bool> SetUserPlanAsync(
         Guid userId,
         string planCode,
@@ -2161,6 +2188,67 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                   AND ev.received_at_utc <= @ToUtc
                 ORDER BY ev.received_at_utc DESC, ev.event_id DESC
                 LIMIT @Limit;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetTelemetryTripCandidatesSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP (@MaxPoints)
+                    p.gps_time_utc AS OccurredAtUtc,
+                    rp.received_at_utc AS ReceivedAtUtc,
+                    p.gps_time_utc AS GpsTimeUtc,
+                    CAST(p.latitude AS FLOAT) AS Latitude,
+                    CAST(p.longitude AS FLOAT) AS Longitude,
+                    p.speed_kmh AS SpeedKmh,
+                    p.heading_deg AS HeadingDeg,
+                    p.packet_id AS PacketId,
+                    p.session_id AS SessionId
+                FROM positions p
+                INNER JOIN raw_packets rp
+                    ON rp.packet_id = p.packet_id
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = 1
+                   AND ud.imei = p.imei
+                WHERE p.gps_time_utc >= @FromUtc
+                  AND p.gps_time_utc <= @ToUtc
+                  AND p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                ORDER BY p.gps_time_utc ASC, rp.received_at_utc ASC, p.position_id ASC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    p.gps_time_utc AS "OccurredAtUtc",
+                    rp.received_at_utc AS "ReceivedAtUtc",
+                    p.gps_time_utc AS "GpsTimeUtc",
+                    p.latitude::DOUBLE PRECISION AS "Latitude",
+                    p.longitude::DOUBLE PRECISION AS "Longitude",
+                    p.speed_kmh AS "SpeedKmh",
+                    p.heading_deg AS "HeadingDeg",
+                    p.packet_id AS "PacketId",
+                    p.session_id AS "SessionId"
+                FROM positions p
+                INNER JOIN raw_packets rp
+                    ON rp.packet_id = p.packet_id
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = TRUE
+                   AND ud.imei = p.imei
+                WHERE p.gps_time_utc >= @FromUtc
+                  AND p.gps_time_utc <= @ToUtc
+                  AND p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                ORDER BY p.gps_time_utc ASC, rp.received_at_utc ASC, p.position_id ASC
+                LIMIT @MaxPoints;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
