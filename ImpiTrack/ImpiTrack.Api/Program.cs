@@ -19,6 +19,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OpenTelemetry.Metrics;
 using Scalar.AspNetCore;
+using Serilog;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -51,13 +52,21 @@ void ConfigureOpenTelemetry(WebApplicationBuilder appBuilder)
         });
 }
 
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
+builder.Host.UseSerilog((context, services, loggerConfiguration) =>
+{
+    loggerConfiguration
+        .ReadFrom.Configuration(context.Configuration)
+        .ReadFrom.Services(services)
+        .Enrich.FromLogContext();
+});
+
 ConfigureOpenTelemetry(builder);
 if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
 {
     builder.Services.AddDataProtection().UseEphemeralDataProtectionProvider();
 }
+
+builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddCors(options =>
 {
@@ -349,7 +358,7 @@ using (IServiceScope dataAccessMigrationScope = app.Services.CreateScope())
 
     if (runtimeContext.IsSqlEnabled && runtimeContext.EnableAutoMigrate)
     {
-        ILogger dataAccessMigrationLogger = dataAccessMigrationScope.ServiceProvider
+        Microsoft.Extensions.Logging.ILogger dataAccessMigrationLogger = dataAccessMigrationScope.ServiceProvider
             .GetRequiredService<ILoggerFactory>()
             .CreateLogger("DataAccessMigrationStartup");
 
@@ -370,7 +379,7 @@ using (IServiceScope dataAccessMigrationScope = app.Services.CreateScope())
 
 using (IServiceScope emailOptionsScope = app.Services.CreateScope())
 {
-    ILogger emailStartupLogger = emailOptionsScope.ServiceProvider
+    Microsoft.Extensions.Logging.ILogger emailStartupLogger = emailOptionsScope.ServiceProvider
         .GetRequiredService<ILoggerFactory>()
         .CreateLogger("EmailConfigurationStartup");
 
@@ -400,6 +409,8 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+app.UseMiddleware<RequestLogContextMiddleware>();
+app.UseSerilogRequestLogging();
 app.UseMiddleware<ApiExceptionMiddleware>();
 app.UseStatusCodePages(async statusCodeContext =>
 {

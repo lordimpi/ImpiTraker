@@ -1,4 +1,5 @@
 using OpenTelemetry.Metrics;
+using Serilog;
 
 namespace TcpServer;
 
@@ -14,6 +15,13 @@ public class Program
     public static void Main(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(args);
+        builder.Services.AddSerilog((services, loggerConfiguration) =>
+        {
+            loggerConfiguration
+                .ReadFrom.Configuration(builder.Configuration)
+                .ReadFrom.Services(services)
+                .Enrich.FromLogContext();
+        });
         ConfigureOpenTelemetry(builder);
         builder.Services.AddTcpServerServices(builder.Configuration);
 
