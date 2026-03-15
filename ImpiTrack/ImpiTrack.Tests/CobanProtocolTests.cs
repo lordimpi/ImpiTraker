@@ -23,6 +23,8 @@ public sealed class CobanProtocolTests
         Assert.NotNull(message);
         Assert.Equal(MessageType.Login, message!.MessageType);
         Assert.Equal("359586015829802", message.Imei);
+        Assert.True(message.IsTelemetryUsable);
+        Assert.Null(message.TelemetryError);
         Assert.True(ackOk);
         Assert.Equal("LOAD", Encoding.ASCII.GetString(ackBytes.Span));
     }
@@ -44,12 +46,39 @@ public sealed class CobanProtocolTests
         Assert.NotNull(message);
         Assert.Equal(MessageType.Tracking, message!.MessageType);
         Assert.Equal("864035051929066", message.Imei);
+        Assert.True(message.IsTelemetryUsable);
+        Assert.Null(message.TelemetryError);
         Assert.NotNull(message.GpsTimeUtc);
         Assert.Equal(new DateTimeOffset(2025, 2, 8, 12, 58, 16, TimeSpan.Zero), message.GpsTimeUtc!.Value);
         Assert.NotNull(message.Latitude);
         Assert.NotNull(message.Longitude);
         Assert.Equal(2.480175d, message.Latitude!.Value, 6);
         Assert.Equal(-76.566907d, message.Longitude!.Value, 6);
+        Assert.True(ackOk);
+        Assert.Equal("ON\r\n", Encoding.ASCII.GetString(ackBytes.Span));
+    }
+
+    [Theory]
+    [InlineData("imei:864035051929066,tracker,250208125816,,F,175816.000,A,022A.81052,N,07634.01441,W,,;", "invalid_coordinate_format")]
+    [InlineData("imei:864035051929066,tracker,250208125816,,F,175816.000,A,028,N,07634.01441,W,,;", "invalid_latitude")]
+    [InlineData("imei:864035051929066,tracker,250208125816,,F,175816.000,A,0228.81052,Q,07634.01441,W,,;", "invalid_hemisphere")]
+    public void CobanTrackerInvalid_ShouldRemainTrackingButMarkTelemetryAsInvalid(string payload, string expectedTelemetryError)
+    {
+        var parser = new CobanProtocolParser();
+        var ack = new CobanAckStrategy();
+        var frame = new Frame(Encoding.ASCII.GetBytes(payload), DateTimeOffset.UtcNow);
+
+        bool parsedOk = parser.TryParse(frame, out ParsedMessage? message, out string? error);
+        bool ackOk = ack.TryBuildAck(message!, out ReadOnlyMemory<byte> ackBytes);
+
+        Assert.True(parsedOk);
+        Assert.Null(error);
+        Assert.NotNull(message);
+        Assert.Equal(MessageType.Tracking, message!.MessageType);
+        Assert.False(message.IsTelemetryUsable);
+        Assert.Equal(expectedTelemetryError, message.TelemetryError);
+        Assert.Null(message.Latitude);
+        Assert.Null(message.Longitude);
         Assert.True(ackOk);
         Assert.Equal("ON\r\n", Encoding.ASCII.GetString(ackBytes.Span));
     }

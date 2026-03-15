@@ -31,6 +31,23 @@ public sealed record UserDeviceBinding(
     DateTimeOffset BoundAtUtc);
 
 /// <summary>
+/// Parametros de consulta para listado administrativo de usuarios.
+/// </summary>
+/// <param name="Page">Pagina solicitada (base 1).</param>
+/// <param name="PageSize">Tamano de pagina.</param>
+/// <param name="Search">Texto parcial para buscar por correo o nombre.</param>
+/// <param name="PlanCode">Codigo exacto de plan para filtrar.</param>
+/// <param name="SortBy">Campo de ordenamiento.</param>
+/// <param name="SortDirection">Direccion del ordenamiento.</param>
+public sealed record AdminUserListQuery(
+    int Page,
+    int PageSize,
+    string? Search,
+    string? PlanCode,
+    string SortBy,
+    string SortDirection);
+
+/// <summary>
 /// Vista administrativa de usuario para listado.
 /// </summary>
 /// <param name="UserId">Identificador del usuario.</param>
@@ -46,6 +63,37 @@ public sealed record UserAccountOverview(
     string PlanCode,
     int MaxGps,
     int UsedGps);
+
+/// <summary>
+/// Resultado paginado generico para contratos administrativos.
+/// </summary>
+/// <typeparam name="T">Tipo de elemento listado.</typeparam>
+/// <param name="Items">Elementos de la pagina actual.</param>
+/// <param name="Page">Pagina actual.</param>
+/// <param name="PageSize">Tamano de pagina aplicado.</param>
+/// <param name="TotalItems">Cantidad total de registros.</param>
+/// <param name="TotalPages">Cantidad total de paginas.</param>
+public sealed record PagedResult<T>(
+    IReadOnlyList<T> Items,
+    int Page,
+    int PageSize,
+    int TotalItems,
+    int TotalPages);
+
+/// <summary>
+/// Plan administrable expuesto para UI administrativa.
+/// </summary>
+/// <param name="PlanId">Identificador del plan.</param>
+/// <param name="Code">Codigo tecnico del plan.</param>
+/// <param name="Name">Nombre visible.</param>
+/// <param name="MaxGps">Cuota maxima de GPS.</param>
+/// <param name="IsActive">Indica si el plan esta activo para asignacion.</param>
+public sealed record AdminPlanDto(
+    Guid PlanId,
+    string Code,
+    string Name,
+    int MaxGps,
+    bool IsActive);
 
 /// <summary>
 /// Resultado de operacion de vinculacion de dispositivo.

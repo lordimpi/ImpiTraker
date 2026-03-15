@@ -174,6 +174,177 @@ public sealed class ApiRegistrationAndAccountTests
             });
 
         Assert.Equal(HttpStatusCode.OK, bindResponse.StatusCode);
+
+        HttpResponseMessage devicesResponse = await client.GetAsync(
+            $"/api/admin/users/{registerPayload.Data.Registration.UserId}/devices");
+
+        Assert.Equal(HttpStatusCode.OK, devicesResponse.StatusCode);
+        ApiEnvelope<List<UserDeviceResponse>>? devicesPayload = await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<List<UserDeviceResponse>>>();
+        Assert.NotNull(devicesPayload);
+        Assert.True(devicesPayload!.Success);
+        Assert.NotNull(devicesPayload.Data);
+        Assert.Contains(devicesPayload.Data!, x => x.Imei == "111222333444555");
+    }
+
+    [Fact]
+    public async Task AdminPlans_ShouldReturnActiveCatalog()
+    {
+        await using var factory = CreateFactory(seedAdminOnStart: true);
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse adminToken = await LoginAsAdminAsync(client);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.AccessToken);
+
+        HttpResponseMessage response = await client.GetAsync("/api/admin/plans");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ApiEnvelope<List<AdminPlanResponse>>? payload = await response.Content.ReadFromJsonAsync<ApiEnvelope<List<AdminPlanResponse>>>();
+        Assert.NotNull(payload);
+        Assert.True(payload!.Success);
+        Assert.NotNull(payload.Data);
+        Assert.Contains(payload.Data!, x => x.Code == "BASIC" && x.IsActive);
+        Assert.Contains(payload.Data!, x => x.Code == "PRO" && x.IsActive);
+        Assert.Contains(payload.Data!, x => x.Code == "ENTERPRISE" && x.IsActive);
+    }
+
+    [Fact]
+    public async Task AdminPlans_ShouldReturnForbidden_ForNonAdmin()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse userToken = await RegisterVerifyAndLoginAsync(
+            client,
+            "plain.user",
+            "plain.user@imptrack.local");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken.AccessToken);
+
+        HttpResponseMessage response = await client.GetAsync("/api/admin/plans");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AdminUsers_ShouldSupportPaginationSearchFiltersAndSorting()
+    {
+        await using var factory = CreateFactory(seedAdminOnStart: true);
+        using HttpClient adminClient = factory.CreateClient();
+
+        Guid anaId = await RegisterAndVerifyAsync(factory.CreateClient(), "ana.basic", "ana.basic@imptrack.local", "Ana Basic");
+        Guid brunoId = await RegisterAndVerifyAsync(factory.CreateClient(), "bruno.pro", "bruno.pro@imptrack.local", "Bruno Pro");
+        Guid carlaId = await RegisterAndVerifyAsync(factory.CreateClient(), "carla.enterprise", "carla.enterprise@imptrack.local", "Carla Enterprise");
+
+        AuthTokenPairResponse adminToken = await LoginAsAdminAsync(adminClient);
+        adminClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.AccessToken);
+
+        HttpResponseMessage setProResponse = await adminClient.PutAsJsonAsync(
+            $"/api/admin/users/{brunoId}/plan",
+            new { planCode = "PRO" });
+        Assert.Equal(HttpStatusCode.OK, setProResponse.StatusCode);
+
+        HttpResponseMessage setEnterpriseResponse = await adminClient.PutAsJsonAsync(
+            $"/api/admin/users/{carlaId}/plan",
+            new { planCode = "ENTERPRISE" });
+        Assert.Equal(HttpStatusCode.OK, setEnterpriseResponse.StatusCode);
+
+        HttpResponseMessage pagedResponse = await adminClient.GetAsync("/api/admin/users?page=1&pageSize=2&sortBy=email&sortDirection=asc");
+        Assert.Equal(HttpStatusCode.OK, pagedResponse.StatusCode);
+        ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>? pagedPayload =
+            await pagedResponse.Content.ReadFromJsonAsync<ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>>();
+        Assert.NotNull(pagedPayload);
+        Assert.True(pagedPayload!.Success);
+        Assert.NotNull(pagedPayload.Data);
+        Assert.Equal(1, pagedPayload.Data!.Page);
+        Assert.Equal(2, pagedPayload.Data.PageSize);
+        Assert.Equal(2, pagedPayload.Data.Items.Count);
+        Assert.True(pagedPayload.Data.TotalItems >= 4);
+        Assert.True(pagedPayload.Data.TotalPages >= 2);
+        Assert.True(string.CompareOrdinal(pagedPayload.Data.Items[0].Email, pagedPayload.Data.Items[1].Email) < 0);
+
+        HttpResponseMessage searchByEmailResponse = await adminClient.GetAsync("/api/admin/users?search=bruno.pro");
+        Assert.Equal(HttpStatusCode.OK, searchByEmailResponse.StatusCode);
+        ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>? searchByEmailPayload =
+            await searchByEmailResponse.Content.ReadFromJsonAsync<ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>>();
+        Assert.NotNull(searchByEmailPayload);
+        Assert.NotNull(searchByEmailPayload!.Data);
+        Assert.Single(searchByEmailPayload.Data!.Items);
+        Assert.Equal("bruno.pro@imptrack.local", searchByEmailPayload.Data.Items[0].Email);
+
+        HttpResponseMessage searchByFullNameResponse = await adminClient.GetAsync("/api/admin/users?search=Carla");
+        Assert.Equal(HttpStatusCode.OK, searchByFullNameResponse.StatusCode);
+        ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>? searchByFullNamePayload =
+            await searchByFullNameResponse.Content.ReadFromJsonAsync<ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>>();
+        Assert.NotNull(searchByFullNamePayload);
+        Assert.NotNull(searchByFullNamePayload!.Data);
+        Assert.Single(searchByFullNamePayload.Data!.Items);
+        Assert.Equal("Carla Enterprise", searchByFullNamePayload.Data.Items[0].FullName);
+
+        HttpResponseMessage filterByPlanResponse = await adminClient.GetAsync("/api/admin/users?planCode=PRO");
+        Assert.Equal(HttpStatusCode.OK, filterByPlanResponse.StatusCode);
+        ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>? filterByPlanPayload =
+            await filterByPlanResponse.Content.ReadFromJsonAsync<ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>>();
+        Assert.NotNull(filterByPlanPayload);
+        Assert.NotNull(filterByPlanPayload!.Data);
+        Assert.Single(filterByPlanPayload.Data!.Items);
+        Assert.Equal("PRO", filterByPlanPayload.Data.Items[0].PlanCode);
+        Assert.Equal("bruno.pro@imptrack.local", filterByPlanPayload.Data.Items[0].Email);
+
+        HttpResponseMessage pageOutOfRangeResponse = await adminClient.GetAsync("/api/admin/users?page=99&pageSize=10");
+        Assert.Equal(HttpStatusCode.OK, pageOutOfRangeResponse.StatusCode);
+        ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>? pageOutOfRangePayload =
+            await pageOutOfRangeResponse.Content.ReadFromJsonAsync<ApiEnvelope<PagedResponse<AdminUserOverviewResponse>>>();
+        Assert.NotNull(pageOutOfRangePayload);
+        Assert.NotNull(pageOutOfRangePayload!.Data);
+        Assert.Empty(pageOutOfRangePayload.Data!.Items);
+        Assert.Equal(99, pageOutOfRangePayload.Data.Page);
+    }
+
+    [Fact]
+    public async Task AdminUsers_ShouldReturnBadRequest_WhenSortParametersAreInvalid()
+    {
+        await using var factory = CreateFactory(seedAdminOnStart: true);
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse adminToken = await LoginAsAdminAsync(client);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.AccessToken);
+
+        HttpResponseMessage invalidSortByResponse = await client.GetAsync("/api/admin/users?sortBy=unknown");
+        Assert.Equal(HttpStatusCode.BadRequest, invalidSortByResponse.StatusCode);
+        using JsonDocument invalidSortByBody = await ReadJsonAsync(invalidSortByResponse);
+        Assert.Equal("invalid_sort_by", invalidSortByBody.RootElement.GetProperty("error").GetProperty("code").GetString());
+
+        HttpResponseMessage invalidSortDirectionResponse = await client.GetAsync("/api/admin/users?sortDirection=sideways");
+        Assert.Equal(HttpStatusCode.BadRequest, invalidSortDirectionResponse.StatusCode);
+        using JsonDocument invalidSortDirectionBody = await ReadJsonAsync(invalidSortDirectionResponse);
+        Assert.Equal("invalid_sort_direction", invalidSortDirectionBody.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task AdminUserDevices_ShouldReturnNotFound_WhenUserDoesNotExist()
+    {
+        await using var factory = CreateFactory(seedAdminOnStart: true);
+        using HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage adminLoginResponse = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            userNameOrEmail = "admin",
+            password = "ChangeMe!123"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, adminLoginResponse.StatusCode);
+        ApiEnvelope<AuthTokenPairResponse>? adminToken = await adminLoginResponse.Content.ReadFromJsonAsync<ApiEnvelope<AuthTokenPairResponse>>();
+        Assert.NotNull(adminToken);
+        Assert.NotNull(adminToken!.Data);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.Data!.AccessToken);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/admin/users/{Guid.NewGuid():D}/devices");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using JsonDocument body = await ReadJsonAsync(response);
+        Assert.False(body.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal("user_not_found", body.RootElement.GetProperty("error").GetProperty("code").GetString());
     }
 
     [Fact]
@@ -393,6 +564,47 @@ public sealed class ApiRegistrationAndAccountTests
         public DateTimeOffset BoundAtUtc { get; set; }
     }
 
+    private sealed class AdminPlanResponse
+    {
+        public Guid PlanId { get; set; }
+
+        public string Code { get; set; } = string.Empty;
+
+        public string Name { get; set; } = string.Empty;
+
+        public int MaxGps { get; set; }
+
+        public bool IsActive { get; set; }
+    }
+
+    private sealed class AdminUserOverviewResponse
+    {
+        public Guid UserId { get; set; }
+
+        public string Email { get; set; } = string.Empty;
+
+        public string? FullName { get; set; }
+
+        public string PlanCode { get; set; } = string.Empty;
+
+        public int MaxGps { get; set; }
+
+        public int UsedGps { get; set; }
+    }
+
+    private sealed class PagedResponse<T>
+    {
+        public List<T> Items { get; set; } = [];
+
+        public int Page { get; set; }
+
+        public int PageSize { get; set; }
+
+        public int TotalItems { get; set; }
+
+        public int TotalPages { get; set; }
+    }
+
     private static async Task<AuthTokenPairResponse> RegisterVerifyAndLoginAsync(
         HttpClient client,
         string userName,
@@ -423,6 +635,56 @@ public sealed class ApiRegistrationAndAccountTests
         {
             userNameOrEmail = userName,
             password = "ChangeMe!123"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
+        ApiEnvelope<AuthTokenPairResponse>? loginPayload = await loginResponse.Content.ReadFromJsonAsync<ApiEnvelope<AuthTokenPairResponse>>();
+        Assert.NotNull(loginPayload);
+        Assert.NotNull(loginPayload!.Data);
+        return loginPayload.Data!;
+    }
+
+    private static async Task<Guid> RegisterAndVerifyAsync(
+        HttpClient client,
+        string userName,
+        string email,
+        string? fullName)
+    {
+        HttpResponseMessage registerResponse = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            userName,
+            email,
+            password = "ChangeMe!123",
+            fullName
+        });
+
+        Assert.Equal(HttpStatusCode.Created, registerResponse.StatusCode);
+        ApiEnvelope<RegisterResultResponse>? registerPayload = await registerResponse.Content.ReadFromJsonAsync<ApiEnvelope<RegisterResultResponse>>();
+        Assert.NotNull(registerPayload);
+        Assert.NotNull(registerPayload!.Data);
+        Assert.NotNull(registerPayload.Data!.Registration);
+
+        HttpResponseMessage verifyResponse = await client.PostAsJsonAsync("/api/auth/verify-email", new
+        {
+            userId = registerPayload.Data.Registration!.UserId,
+            token = registerPayload.Data.Registration.EmailVerificationToken
+        });
+
+        Assert.Equal(HttpStatusCode.OK, verifyResponse.StatusCode);
+        return registerPayload.Data.Registration.UserId;
+    }
+
+    private static Task<AuthTokenPairResponse> LoginAsAdminAsync(HttpClient client)
+    {
+        return LoginAsync(client, "admin", "ChangeMe!123");
+    }
+
+    private static async Task<AuthTokenPairResponse> LoginAsync(HttpClient client, string userNameOrEmail, string password)
+    {
+        HttpResponseMessage loginResponse = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            userNameOrEmail,
+            password
         });
 
         Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);

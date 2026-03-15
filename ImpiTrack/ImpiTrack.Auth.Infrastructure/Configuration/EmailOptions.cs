@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace ImpiTrack.Auth.Infrastructure.Configuration;
 
@@ -34,6 +34,12 @@ public sealed class EmailOptions
     /// </summary>
     [Url]
     public string VerifyEmailBaseUrl { get; set; } = "https://localhost:5001/api/auth/verify-email/confirm";
+
+    /// <summary>
+    /// URL base para la pantalla o endpoint que completa el reset de contrasena.
+    /// </summary>
+    [Url]
+    public string ResetPasswordBaseUrl { get; set; } = "https://localhost:4200/auth/reset-password";
 
     /// <summary>
     /// Configuracion de proveedor SMTP.
@@ -73,3 +79,4 @@ public sealed class SmtpEmailOptions
     /// </summary>
     public string? Password { get; set; }
 }
+

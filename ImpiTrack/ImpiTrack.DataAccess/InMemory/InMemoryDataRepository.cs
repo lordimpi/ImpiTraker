@@ -9,11 +9,20 @@ namespace ImpiTrack.DataAccess.InMemory;
 /// <summary>
 /// Repositorio en memoria para pruebas locales cuando no hay base de datos SQL configurada.
 /// </summary>
-public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository
+public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository, ITelemetryQueryRepository
 {
     private const string DefaultPlanCode = "BASIC";
+    private static readonly IReadOnlyList<AdminPlanDto> Plans =
+    [
+        new AdminPlanDto(Guid.Parse("10000000-0000-0000-0000-000000000001"), "BASIC", "Basic", 3, true),
+        new AdminPlanDto(Guid.Parse("10000000-0000-0000-0000-000000000002"), "PRO", "Pro", 10, true),
+        new AdminPlanDto(Guid.Parse("10000000-0000-0000-0000-000000000003"), "ENTERPRISE", "Enterprise", 100, true)
+    ];
+
     private readonly ConcurrentDictionary<Guid, InMemoryUserAccount> _accounts = new();
     private readonly ConcurrentDictionary<string, Guid> _activeImeiOwners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, List<StoredPosition>> _positionsByImei = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, List<StoredEvent>> _eventsByImei = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _sync = new();
     private readonly IOpsDataStore _store;
 
@@ -46,8 +55,52 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     public Task<PersistEnvelopeResult> PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _ = envelope;
-        return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
+
+        string? imei = envelope.Message.Imei?.Trim();
+        if (string.IsNullOrWhiteSpace(imei) || !_activeImeiOwners.ContainsKey(imei))
+        {
+            return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.SkippedUnownedDevice));
+        }
+
+        lock (_sync)
+        {
+            if (envelope.Message.MessageType == MessageType.Tracking)
+            {
+                if (!envelope.Message.IsTelemetryUsable)
+                {
+                    return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
+                }
+
+                List<StoredPosition> positions = _positionsByImei.GetOrAdd(imei, static _ => []);
+                positions.Add(new StoredPosition(
+                    envelope.PacketId.Value,
+                    envelope.SessionId.Value,
+                    envelope.Message.Protocol,
+                    envelope.Message.MessageType,
+                    envelope.Message.GpsTimeUtc ?? envelope.Message.ReceivedAtUtc,
+                    envelope.Message.ReceivedAtUtc,
+                    envelope.Message.GpsTimeUtc,
+                    envelope.Message.Latitude,
+                    envelope.Message.Longitude,
+                    envelope.Message.SpeedKmh,
+                    envelope.Message.HeadingDeg));
+
+                return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
+            }
+
+            List<StoredEvent> events = _eventsByImei.GetOrAdd(imei, static _ => []);
+            events.Add(new StoredEvent(
+                Guid.NewGuid(),
+                envelope.PacketId.Value,
+                envelope.SessionId.Value,
+                envelope.Message.Protocol,
+                envelope.Message.MessageType,
+                envelope.Message.MessageType.ToString(),
+                envelope.Message.Text,
+                envelope.Message.ReceivedAtUtc));
+
+            return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
+        }
     }
 
     /// <inheritdoc />
@@ -103,16 +156,7 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
 
         _accounts.AddOrUpdate(
             userId,
-            _ => new InMemoryUserAccount
-            {
-                UserId = userId,
-                Email = email,
-                FullName = fullName,
-                PlanCode = DefaultPlanCode,
-                PlanName = "Basic",
-                MaxGps = 3,
-                CreatedAtUtc = nowUtc
-            },
+            _ => CreateAccount(userId, email, fullName, nowUtc),
             (_, existing) =>
             {
                 existing.Email = email;
@@ -239,21 +283,214 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken)
+    public Task<PagedResult<UserAccountOverview>> GetUsersAsync(AdminUserListQuery query, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        int normalizedLimit = Math.Clamp(limit, 1, 500);
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+        string? search = query.Search?.Trim();
+        string? planCode = string.IsNullOrWhiteSpace(query.PlanCode)
+            ? null
+            : query.PlanCode.Trim().ToUpperInvariant();
+        string sortBy = query.SortBy.Trim();
+        bool descending = string.Equals(query.SortDirection, "desc", StringComparison.OrdinalIgnoreCase);
 
-        IReadOnlyList<UserAccountOverview> rows = _accounts.Values
-            .OrderBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
-            .Take(normalizedLimit)
-            .Select(x => new UserAccountOverview(
-                x.UserId,
-                x.Email,
-                x.FullName,
-                x.PlanCode,
-                x.MaxGps,
-                x.Devices.Count))
+        IEnumerable<InMemoryUserAccount> filtered = _accounts.Values;
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            filtered = filtered.Where(x =>
+                x.Email.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrWhiteSpace(x.FullName) &&
+                 x.FullName.Contains(search, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (planCode is not null)
+        {
+            filtered = filtered.Where(x => string.Equals(x.PlanCode, planCode, StringComparison.OrdinalIgnoreCase));
+        }
+
+        IEnumerable<InMemoryUserAccount> ordered = ApplyOrdering(filtered, sortBy, descending);
+        int totalItems = filtered.Count();
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+
+        IReadOnlyList<UserAccountOverview> rows = ordered
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(ToOverview)
+            .ToArray();
+
+        return Task.FromResult(new PagedResult<UserAccountOverview>(rows, page, pageSize, totalItems, totalPages));
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<AdminPlanDto>> GetPlansAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<AdminPlanDto> rows = Plans
+            .Where(x => x.IsActive)
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<TelemetryDeviceSummaryDto>> GetDeviceSummariesAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_accounts.TryGetValue(userId, out InMemoryUserAccount? account))
+        {
+            return Task.FromResult<IReadOnlyList<TelemetryDeviceSummaryDto>>([]);
+        }
+
+        IReadOnlyList<SessionRecord> activeSessions = _store.GetActiveSessions(port: null);
+        IReadOnlyList<TelemetryDeviceSummaryDto> rows = account.Devices
+            .OrderByDescending(x => x.BoundAtUtc)
+            .ThenBy(x => x.Imei, StringComparer.OrdinalIgnoreCase)
+            .Select(device => BuildTelemetrySummary(device, activeSessions))
+            .ToArray();
+
+        return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
+    public Task<bool> HasActiveDeviceBindingAsync(Guid userId, string imei, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_accounts.TryGetValue(userId, out InMemoryUserAccount? account))
+        {
+            return Task.FromResult(false);
+        }
+
+        bool exists = account.Devices.Any(x => string.Equals(x.Imei, imei, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(exists);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<DevicePositionPointDto>> GetPositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_accounts.TryGetValue(userId, out _))
+        {
+            return Task.FromResult<IReadOnlyList<DevicePositionPointDto>>([]);
+        }
+
+        if (!_positionsByImei.TryGetValue(imei, out List<StoredPosition>? positions))
+        {
+            return Task.FromResult<IReadOnlyList<DevicePositionPointDto>>([]);
+        }
+
+        IReadOnlyList<DevicePositionPointDto> rows = positions
+            .Where(x =>
+                x.Latitude.HasValue &&
+                x.Longitude.HasValue &&
+                x.OccurredAtUtc >= fromUtc &&
+                x.OccurredAtUtc <= toUtc)
+            .OrderByDescending(x => x.OccurredAtUtc)
+            .ThenByDescending(x => x.ReceivedAtUtc)
+            .Take(limit)
+            .Select(x => new DevicePositionPointDto(
+                x.OccurredAtUtc,
+                x.ReceivedAtUtc,
+                x.GpsTimeUtc,
+                x.Latitude!.Value,
+                x.Longitude!.Value,
+                x.SpeedKmh,
+                x.HeadingDeg,
+                x.PacketId,
+                x.SessionId))
+            .ToArray();
+
+        return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<DeviceEventDto>> GetEventsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_accounts.TryGetValue(userId, out _))
+        {
+            return Task.FromResult<IReadOnlyList<DeviceEventDto>>([]);
+        }
+
+        if (!_eventsByImei.TryGetValue(imei, out List<StoredEvent>? events))
+        {
+            return Task.FromResult<IReadOnlyList<DeviceEventDto>>([]);
+        }
+
+        IReadOnlyList<DeviceEventDto> rows = events
+            .Where(x => x.ReceivedAtUtc >= fromUtc && x.ReceivedAtUtc <= toUtc)
+            .OrderByDescending(x => x.ReceivedAtUtc)
+            .ThenByDescending(x => x.EventId)
+            .Take(limit)
+            .Select(x => new DeviceEventDto(
+                x.EventId,
+                x.ReceivedAtUtc,
+                x.ReceivedAtUtc,
+                x.EventCode,
+                x.PayloadText,
+                x.Protocol,
+                x.MessageType,
+                x.PacketId,
+                x.SessionId))
+            .ToArray();
+
+        return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<DevicePositionPointDto>> GetTripCandidatePositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int maxPoints,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_accounts.TryGetValue(userId, out _))
+        {
+            return Task.FromResult<IReadOnlyList<DevicePositionPointDto>>([]);
+        }
+
+        if (!_positionsByImei.TryGetValue(imei, out List<StoredPosition>? positions))
+        {
+            return Task.FromResult<IReadOnlyList<DevicePositionPointDto>>([]);
+        }
+
+        IReadOnlyList<DevicePositionPointDto> rows = positions
+            .Where(x =>
+                x.Latitude.HasValue &&
+                x.Longitude.HasValue &&
+                x.OccurredAtUtc >= fromUtc &&
+                x.OccurredAtUtc <= toUtc)
+            .OrderBy(x => x.OccurredAtUtc)
+            .ThenBy(x => x.ReceivedAtUtc)
+            .Take(maxPoints)
+            .Select(x => new DevicePositionPointDto(
+                x.OccurredAtUtc,
+                x.ReceivedAtUtc,
+                x.GpsTimeUtc,
+                x.Latitude!.Value,
+                x.Longitude!.Value,
+                x.SpeedKmh,
+                x.HeadingDeg,
+                x.PacketId,
+                x.SessionId))
             .ToArray();
 
         return Task.FromResult(rows);
@@ -274,39 +511,168 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
             return Task.FromResult(false);
         }
 
-        if (!TryResolvePlan(planCode, out string normalizedCode, out string name, out int maxGps))
+        if (!TryResolvePlan(planCode, out AdminPlanDto? plan) || plan is null)
         {
             return Task.FromResult(false);
         }
 
-        account.PlanCode = normalizedCode;
-        account.PlanName = name;
-        account.MaxGps = maxGps;
+        account.PlanCode = plan.Code;
+        account.PlanName = plan.Name;
+        account.MaxGps = plan.MaxGps;
         return Task.FromResult(true);
     }
 
-    private static bool TryResolvePlan(string planCode, out string normalizedCode, out string name, out int maxGps)
+    private static InMemoryUserAccount CreateAccount(Guid userId, string email, string? fullName, DateTimeOffset nowUtc)
     {
-        normalizedCode = planCode.Trim().ToUpperInvariant();
-        switch (normalizedCode)
+        if (!TryResolvePlan(DefaultPlanCode, out AdminPlanDto? plan) || plan is null)
         {
-            case "BASIC":
-                name = "Basic";
-                maxGps = 3;
-                return true;
-            case "PRO":
-                name = "Pro";
-                maxGps = 10;
-                return true;
-            case "ENTERPRISE":
-                name = "Enterprise";
-                maxGps = 100;
-                return true;
-            default:
-                name = string.Empty;
-                maxGps = 0;
-                return false;
+            throw new InvalidOperationException("default_plan_not_configured");
         }
+
+        return new InMemoryUserAccount
+        {
+            UserId = userId,
+            Email = email,
+            FullName = fullName,
+            PlanCode = plan.Code,
+            PlanName = plan.Name,
+            MaxGps = plan.MaxGps,
+            CreatedAtUtc = nowUtc
+        };
+    }
+
+    private static bool TryResolvePlan(string planCode, out AdminPlanDto? plan)
+    {
+        string normalizedCode = planCode.Trim().ToUpperInvariant();
+        plan = Plans.FirstOrDefault(x => string.Equals(x.Code, normalizedCode, StringComparison.OrdinalIgnoreCase) && x.IsActive);
+        return plan is not null;
+    }
+
+    private static UserAccountOverview ToOverview(InMemoryUserAccount account)
+    {
+        return new UserAccountOverview(
+            account.UserId,
+            account.Email,
+            account.FullName,
+            account.PlanCode,
+            account.MaxGps,
+            account.Devices.Count);
+    }
+
+    private static IEnumerable<InMemoryUserAccount> ApplyOrdering(
+        IEnumerable<InMemoryUserAccount> source,
+        string sortBy,
+        bool descending)
+    {
+        return sortBy.ToLowerInvariant() switch
+        {
+            "fullname" => descending
+                ? source.OrderByDescending(x => x.FullName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.FullName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            "plancode" => descending
+                ? source.OrderByDescending(x => x.PlanCode, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.PlanCode, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            "maxgps" => descending
+                ? source.OrderByDescending(x => x.MaxGps).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.MaxGps).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            "usedgps" => descending
+                ? source.OrderByDescending(x => x.Devices.Count).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.Devices.Count).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            "createdat" => descending
+                ? source.OrderByDescending(x => x.CreatedAtUtc).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                : source.OrderBy(x => x.CreatedAtUtc).ThenBy(x => x.Email, StringComparer.OrdinalIgnoreCase),
+            _ => descending
+                ? source.OrderByDescending(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.UserId)
+                : source.OrderBy(x => x.Email, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(x => x.UserId)
+        };
+    }
+
+    private TelemetryDeviceSummaryDto BuildTelemetrySummary(UserDeviceBinding device, IReadOnlyList<SessionRecord> activeSessions)
+    {
+        StoredPosition? latestPosition = _positionsByImei.TryGetValue(device.Imei, out List<StoredPosition>? positions)
+            ? positions
+                .Where(x => x.Latitude.HasValue && x.Longitude.HasValue)
+                .OrderByDescending(x => x.OccurredAtUtc)
+                .ThenByDescending(x => x.ReceivedAtUtc)
+                .FirstOrDefault()
+            : null;
+
+        StoredPosition? latestPositionAny = _positionsByImei.TryGetValue(device.Imei, out positions)
+            ? positions
+                .OrderByDescending(x => x.ReceivedAtUtc)
+                .ThenByDescending(x => x.OccurredAtUtc)
+                .FirstOrDefault()
+            : null;
+
+        StoredEvent? latestEvent = _eventsByImei.TryGetValue(device.Imei, out List<StoredEvent>? events)
+            ? events
+                .OrderByDescending(x => x.ReceivedAtUtc)
+                .ThenByDescending(x => x.EventId)
+                .FirstOrDefault()
+            : null;
+
+        SessionRecord? activeSession = activeSessions
+            .Where(x => string.Equals(x.Imei, device.Imei, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.LastSeenAtUtc)
+            .ThenBy(x => x.SessionId.Value)
+            .FirstOrDefault();
+
+        DateTimeOffset? latestSeen = activeSession?.LastSeenAtUtc;
+        if (latestPositionAny is not null && (!latestSeen.HasValue || latestPositionAny.ReceivedAtUtc > latestSeen.Value))
+        {
+            latestSeen = latestPositionAny.ReceivedAtUtc;
+        }
+
+        if (latestEvent is not null && (!latestSeen.HasValue || latestEvent.ReceivedAtUtc > latestSeen.Value))
+        {
+            latestSeen = latestEvent.ReceivedAtUtc;
+        }
+
+        ProtocolId? protocol = null;
+        MessageType? messageType = null;
+        DateTimeOffset? latestMessageAtUtc = null;
+
+        if (latestPositionAny is not null)
+        {
+            latestMessageAtUtc = latestPositionAny.ReceivedAtUtc;
+            protocol = latestPositionAny.Protocol;
+            messageType = latestPositionAny.MessageType;
+        }
+
+        if (latestEvent is not null && (!latestMessageAtUtc.HasValue || latestEvent.ReceivedAtUtc > latestMessageAtUtc.Value))
+        {
+            latestMessageAtUtc = latestEvent.ReceivedAtUtc;
+            protocol = latestEvent.Protocol;
+            messageType = latestEvent.MessageType;
+        }
+
+        LastKnownPositionDto? lastPosition = latestPosition is null
+            ? null
+            : new LastKnownPositionDto(
+                latestPosition.OccurredAtUtc,
+                latestPosition.ReceivedAtUtc,
+                latestPosition.GpsTimeUtc,
+                latestPosition.Latitude!.Value,
+                latestPosition.Longitude!.Value,
+                latestPosition.SpeedKmh,
+                latestPosition.HeadingDeg,
+                latestPosition.PacketId,
+                latestPosition.SessionId);
+
+        return new TelemetryDeviceSummaryDto(
+            device.Imei,
+            device.BoundAtUtc,
+            latestSeen,
+            activeSession?.SessionId.Value,
+            protocol,
+            messageType,
+            lastPosition);
     }
 
     private sealed class InMemoryUserAccount
@@ -327,4 +693,27 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
 
         public List<UserDeviceBinding> Devices { get; } = [];
     }
+
+    private sealed record StoredPosition(
+        Guid PacketId,
+        Guid SessionId,
+        ProtocolId Protocol,
+        MessageType MessageType,
+        DateTimeOffset OccurredAtUtc,
+        DateTimeOffset ReceivedAtUtc,
+        DateTimeOffset? GpsTimeUtc,
+        double? Latitude,
+        double? Longitude,
+        double? SpeedKmh,
+        int? HeadingDeg);
+
+    private sealed record StoredEvent(
+        Guid EventId,
+        Guid PacketId,
+        Guid SessionId,
+        ProtocolId Protocol,
+        MessageType MessageType,
+        string EventCode,
+        string PayloadText,
+        DateTimeOffset ReceivedAtUtc);
 }

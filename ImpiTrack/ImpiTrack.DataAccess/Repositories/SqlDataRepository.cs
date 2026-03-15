@@ -17,7 +17,7 @@ namespace ImpiTrack.DataAccess.Repositories;
 /// <summary>
 /// Repositorio SQL con soporte para SQL Server y PostgreSQL.
 /// </summary>
-public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository
+public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository, ITelemetryQueryRepository
 {
     private const string DefaultPlanCode = "BASIC";
     private readonly IDbConnectionFactory _connectionFactory;
@@ -147,6 +147,13 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 return new PersistEnvelopeResult(PersistEnvelopeStatus.SkippedUnownedDevice);
             }
 
+            RawParseStatus rawParseStatus = envelope.Message.MessageType == MessageType.Tracking && !envelope.Message.IsTelemetryUsable
+                ? RawParseStatus.Failed
+                : RawParseStatus.Ok;
+            string? rawParseError = rawParseStatus == RawParseStatus.Ok
+                ? null
+                : envelope.Message.TelemetryError ?? "invalid_tracking_payload";
+
             await UpsertRawPacketAsync(
                 connection,
                 transaction,
@@ -160,8 +167,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     envelope.Message.MessageType,
                     envelope.Message.Text,
                     envelope.Message.ReceivedAtUtc,
-                    RawParseStatus.Ok,
-                    null,
+                    rawParseStatus,
+                    rawParseError,
                     false,
                     null,
                     null,
@@ -172,6 +179,12 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
 
             if (envelope.Message.MessageType == MessageType.Tracking)
             {
+                if (!envelope.Message.IsTelemetryUsable)
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                    return new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted);
+                }
+
                 string dedupeKey = BuildTrackingDedupeKey(envelope);
                 CommandDefinition insertPosition = new(
                     GetInsertPositionSql(_context.Provider),
@@ -542,24 +555,185 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken)
+    public async Task<PagedResult<UserAccountOverview>> GetUsersAsync(AdminUserListQuery query, CancellationToken cancellationToken)
     {
-        int normalizedLimit = Math.Clamp(limit, 1, 500);
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+        int offset = (page - 1) * pageSize;
+        string sortBy = query.SortBy.Trim();
+        string sortDirection = string.Equals(query.SortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
+        string? search = string.IsNullOrWhiteSpace(query.Search) ? null : query.Search.Trim();
+        string? planCode = string.IsNullOrWhiteSpace(query.PlanCode) ? null : query.PlanCode.Trim().ToUpperInvariant();
+
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var parameters = new
+        {
+            Search = search,
+            SearchPattern = search is null ? null : $"%{search}%",
+            PlanCode = planCode,
+            Offset = offset,
+            PageSize = pageSize
+        };
+
+        CommandDefinition countCommand = new(
+            GetUsersCountSql(_context.Provider),
+            parameters,
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int totalItems = await connection.QuerySingleAsync<int>(countCommand);
+
         CommandDefinition command = new(
-            GetUsersOverviewSql(_context.Provider),
-            new { Limit = normalizedLimit },
+            GetUsersOverviewPageSql(
+                _context.Provider,
+                ResolveUserSortColumn(_context.Provider, sortBy),
+                sortDirection),
+            parameters,
             commandTimeout: _context.CommandTimeoutSeconds,
             cancellationToken: cancellationToken);
 
         IEnumerable<UserOverviewRow> rows = await connection.QueryAsync<UserOverviewRow>(command);
-        return rows.Select(x => new UserAccountOverview(
+        IReadOnlyList<UserAccountOverview> items = rows.Select(x => new UserAccountOverview(
             x.UserId,
             x.Email,
             x.FullName,
             x.PlanCode,
             x.MaxGps,
             x.UsedGps)).ToArray();
+
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        return new PagedResult<UserAccountOverview>(items, page, pageSize, totalItems, totalPages);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<AdminPlanDto>> GetPlansAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetPlansSql(_context.Provider),
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<PlanRow> rows = await connection.QueryAsync<PlanRow>(command);
+        return rows.Select(x => new AdminPlanDto(
+            x.PlanId,
+            x.Code,
+            x.Name,
+            x.MaxGps,
+            x.IsActive)).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<TelemetryDeviceSummaryDto>> GetDeviceSummariesAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetTelemetryDeviceSummariesSql(_context.Provider),
+            new { UserId = userId },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<TelemetryDeviceSummaryRow> rows = await connection.QueryAsync<TelemetryDeviceSummaryRow>(command);
+        return rows.Select(ToTelemetryDeviceSummary).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> HasActiveDeviceBindingAsync(Guid userId, string imei, CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetHasActiveDeviceBindingSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim()
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int? result = await connection.ExecuteScalarAsync<int?>(command);
+        return result.HasValue;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<DevicePositionPointDto>> GetPositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetTelemetryPositionsSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim(),
+                FromUtc = fromUtc,
+                ToUtc = toUtc,
+                Limit = limit
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<TelemetryPositionRow> rows = await connection.QueryAsync<TelemetryPositionRow>(command);
+        return rows.Select(ToDevicePositionPoint).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<DeviceEventDto>> GetEventsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetTelemetryEventsSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim(),
+                FromUtc = fromUtc,
+                ToUtc = toUtc,
+                Limit = limit
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<TelemetryEventRow> rows = await connection.QueryAsync<TelemetryEventRow>(command);
+        return rows.Select(ToDeviceEvent).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<DevicePositionPointDto>> GetTripCandidatePositionsAsync(
+        Guid userId,
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        int maxPoints,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetTelemetryTripCandidatesSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim(),
+                FromUtc = fromUtc,
+                ToUtc = toUtc,
+                MaxPoints = maxPoints
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<TelemetryPositionRow> rows = await connection.QueryAsync<TelemetryPositionRow>(command);
+        return rows.Select(ToDevicePositionPoint).ToArray();
     }
 
     /// <inheritdoc />
@@ -704,6 +878,102 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
             row.AckPayload,
             row.AckAtUtc,
             row.AckLatencyMs);
+    }
+
+    private static TelemetryDeviceSummaryDto ToTelemetryDeviceSummary(TelemetryDeviceSummaryRow row)
+    {
+        LastKnownPositionDto? lastPosition = row.LastPositionPacketId.HasValue &&
+                                             row.LastPositionSessionId.HasValue &&
+                                             row.LastPositionLatitude.HasValue &&
+                                             row.LastPositionLongitude.HasValue &&
+                                             row.LastPositionOccurredAtUtc.HasValue &&
+                                             row.LastPositionReceivedAtUtc.HasValue
+            ? new LastKnownPositionDto(
+                row.LastPositionOccurredAtUtc.Value,
+                row.LastPositionReceivedAtUtc.Value,
+                row.LastPositionGpsTimeUtc,
+                row.LastPositionLatitude.Value,
+                row.LastPositionLongitude.Value,
+                row.LastPositionSpeedKmh,
+                row.LastPositionHeadingDeg,
+                row.LastPositionPacketId.Value,
+                row.LastPositionSessionId.Value)
+            : null;
+
+        return new TelemetryDeviceSummaryDto(
+            row.Imei,
+            row.BoundAtUtc,
+            row.LastSeenAtUtc,
+            row.ActiveSessionId,
+            ToNullableProtocolId(row.Protocol),
+            ToNullableMessageType(row.LastMessageType),
+            lastPosition);
+    }
+
+    private static DevicePositionPointDto ToDevicePositionPoint(TelemetryPositionRow row)
+    {
+        return new DevicePositionPointDto(
+            row.OccurredAtUtc,
+            row.ReceivedAtUtc,
+            row.GpsTimeUtc,
+            row.Latitude,
+            row.Longitude,
+            row.SpeedKmh,
+            row.HeadingDeg,
+            row.PacketId,
+            row.SessionId);
+    }
+
+    private static DeviceEventDto ToDeviceEvent(TelemetryEventRow row)
+    {
+        return new DeviceEventDto(
+            row.EventId,
+            row.OccurredAtUtc,
+            row.ReceivedAtUtc,
+            row.EventCode,
+            row.PayloadText,
+            ToProtocolId(row.Protocol),
+            ToMessageType(row.MessageType),
+            row.PacketId,
+            row.SessionId);
+    }
+
+    private static ProtocolId ToProtocolId(int value)
+    {
+        return Enum.IsDefined(typeof(ProtocolId), value)
+            ? (ProtocolId)value
+            : ProtocolId.Unknown;
+    }
+
+    private static ProtocolId? ToNullableProtocolId(int? value)
+    {
+        if (!value.HasValue)
+        {
+            return null;
+        }
+
+        return Enum.IsDefined(typeof(ProtocolId), value.Value)
+            ? (ProtocolId)value.Value
+            : null;
+    }
+
+    private static MessageType ToMessageType(int value)
+    {
+        return Enum.IsDefined(typeof(MessageType), value)
+            ? (MessageType)value
+            : MessageType.Unknown;
+    }
+
+    private static MessageType? ToNullableMessageType(int? value)
+    {
+        if (!value.HasValue)
+        {
+            return null;
+        }
+
+        return Enum.IsDefined(typeof(MessageType), value.Value)
+            ? (MessageType)value.Value
+            : null;
     }
 
     private static SessionRecord ToSessionRecord(SessionRow row)
@@ -1463,13 +1733,51 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         };
     }
 
-    private static string GetUsersOverviewSql(DatabaseProvider provider)
+    private static string GetUsersCountSql(DatabaseProvider provider)
     {
         return provider switch
         {
             DatabaseProvider.SqlServer =>
                 """
-                SELECT TOP (@Limit)
+                SELECT COUNT(*)
+                FROM user_profiles up
+                INNER JOIN user_plan_subscriptions s
+                    ON s.user_id = up.user_id
+                   AND s.status = 'Active'
+                   AND s.ends_at_utc IS NULL
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                WHERE (@Search IS NULL
+                    OR up.email LIKE @SearchPattern
+                    OR ISNULL(up.full_name, '') LIKE @SearchPattern)
+                  AND (@PlanCode IS NULL OR p.code = @PlanCode);
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT COUNT(*)::INT
+                FROM user_profiles up
+                INNER JOIN user_plan_subscriptions s
+                    ON s.user_id = up.user_id
+                   AND s.status = 'Active'
+                   AND s.ends_at_utc IS NULL
+                INNER JOIN plans p
+                    ON p.plan_id = s.plan_id
+                WHERE (@Search IS NULL
+                    OR up.email ILIKE @SearchPattern
+                    OR COALESCE(up.full_name, '') ILIKE @SearchPattern)
+                  AND (@PlanCode IS NULL OR p.code = @PlanCode);
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUsersOverviewPageSql(DatabaseProvider provider, string orderByColumn, string sortDirection)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                $"""
+                SELECT
                     up.user_id AS UserId,
                     up.email AS Email,
                     up.full_name AS FullName,
@@ -1490,10 +1798,15 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     WHERE ud.user_id = up.user_id
                       AND ud.is_active = 1
                 ) usage_data
-                ORDER BY up.created_at_utc DESC;
+                WHERE (@Search IS NULL
+                    OR up.email LIKE @SearchPattern
+                    OR ISNULL(up.full_name, '') LIKE @SearchPattern)
+                  AND (@PlanCode IS NULL OR p.code = @PlanCode)
+                ORDER BY {orderByColumn} {sortDirection}, up.user_id ASC
+                OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
                 """,
             DatabaseProvider.Postgres =>
-                """
+                $"""
                 SELECT
                     up.user_id AS "UserId",
                     up.email AS "Email",
@@ -1515,8 +1828,427 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     WHERE ud.user_id = up.user_id
                       AND ud.is_active = TRUE
                 ) usage_data ON TRUE
-                ORDER BY up.created_at_utc DESC
+                WHERE (@Search IS NULL
+                    OR up.email ILIKE @SearchPattern
+                    OR COALESCE(up.full_name, '') ILIKE @SearchPattern)
+                  AND (@PlanCode IS NULL OR p.code = @PlanCode)
+                ORDER BY {orderByColumn} {sortDirection}, up.user_id ASC
+                LIMIT @PageSize OFFSET @Offset;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string ResolveUserSortColumn(DatabaseProvider provider, string sortBy)
+    {
+        string normalized = sortBy.Trim().ToLowerInvariant();
+        return provider switch
+        {
+            DatabaseProvider.SqlServer => normalized switch
+            {
+                "email" => "up.email",
+                "fullname" => "ISNULL(up.full_name, '')",
+                "plancode" => "p.code",
+                "maxgps" => "p.max_gps",
+                "usedgps" => "ISNULL(usage_data.used_gps, 0)",
+                "createdat" => "up.created_at_utc",
+                _ => "up.email"
+            },
+            DatabaseProvider.Postgres => normalized switch
+            {
+                "email" => "up.email",
+                "fullname" => "COALESCE(up.full_name, '')",
+                "plancode" => "p.code",
+                "maxgps" => "p.max_gps",
+                "usedgps" => "COALESCE(usage_data.used_gps, 0)",
+                "createdat" => "up.created_at_utc",
+                _ => "up.email"
+            },
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetPlansSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    plan_id AS PlanId,
+                    code AS Code,
+                    name AS Name,
+                    max_gps AS MaxGps,
+                    is_active AS IsActive
+                FROM plans
+                WHERE is_active = 1
+                ORDER BY name ASC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    plan_id AS "PlanId",
+                    code AS "Code",
+                    name AS "Name",
+                    max_gps AS "MaxGps",
+                    is_active AS "IsActive"
+                FROM plans
+                WHERE is_active = TRUE
+                ORDER BY name ASC;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetTelemetryDeviceSummariesSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    ud.imei AS Imei,
+                    ud.bound_at_utc AS BoundAtUtc,
+                    COALESCE(active_session.LastSeenAtUtc, latest_raw.ReceivedAtUtc, latest_position.ReceivedAtUtc, latest_event.ReceivedAtUtc) AS LastSeenAtUtc,
+                    active_session.SessionId AS ActiveSessionId,
+                    latest_raw.Protocol AS Protocol,
+                    latest_raw.MessageType AS LastMessageType,
+                    latest_position.OccurredAtUtc AS LastPositionOccurredAtUtc,
+                    latest_position.ReceivedAtUtc AS LastPositionReceivedAtUtc,
+                    latest_position.GpsTimeUtc AS LastPositionGpsTimeUtc,
+                    latest_position.Latitude AS LastPositionLatitude,
+                    latest_position.Longitude AS LastPositionLongitude,
+                    latest_position.SpeedKmh AS LastPositionSpeedKmh,
+                    latest_position.HeadingDeg AS LastPositionHeadingDeg,
+                    latest_position.PacketId AS LastPositionPacketId,
+                    latest_position.SessionId AS LastPositionSessionId
+                FROM user_devices ud
+                OUTER APPLY
+                (
+                    SELECT TOP 1
+                        session_id AS SessionId,
+                        last_seen_at_utc AS LastSeenAtUtc
+                    FROM device_sessions
+                    WHERE imei = ud.imei
+                      AND is_active = 1
+                    ORDER BY last_seen_at_utc DESC, session_id ASC
+                ) active_session
+                OUTER APPLY
+                (
+                    SELECT TOP 1
+                        protocol AS Protocol,
+                        message_type AS MessageType,
+                        received_at_utc AS ReceivedAtUtc
+                    FROM raw_packets
+                    WHERE imei = ud.imei
+                    ORDER BY received_at_utc DESC, packet_id DESC
+                ) latest_raw
+                OUTER APPLY
+                (
+                    SELECT TOP 1
+                        p.gps_time_utc AS OccurredAtUtc,
+                        rp.received_at_utc AS ReceivedAtUtc,
+                        p.gps_time_utc AS GpsTimeUtc,
+                        CAST(p.latitude AS FLOAT) AS Latitude,
+                        CAST(p.longitude AS FLOAT) AS Longitude,
+                        p.speed_kmh AS SpeedKmh,
+                        p.heading_deg AS HeadingDeg,
+                        p.packet_id AS PacketId,
+                        p.session_id AS SessionId
+                    FROM positions p
+                    INNER JOIN raw_packets rp
+                        ON rp.packet_id = p.packet_id
+                    WHERE p.imei = ud.imei
+                      AND p.latitude IS NOT NULL
+                      AND p.longitude IS NOT NULL
+                    ORDER BY p.gps_time_utc DESC, rp.received_at_utc DESC, p.position_id DESC
+                ) latest_position
+                OUTER APPLY
+                (
+                    SELECT TOP 1
+                        received_at_utc AS ReceivedAtUtc
+                    FROM device_events
+                    WHERE imei = ud.imei
+                    ORDER BY received_at_utc DESC, event_id DESC
+                ) latest_event
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = 1
+                ORDER BY ud.bound_at_utc DESC, ud.imei ASC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    ud.imei AS "Imei",
+                    ud.bound_at_utc AS "BoundAtUtc",
+                    COALESCE(active_session."LastSeenAtUtc", latest_raw."ReceivedAtUtc", latest_position."ReceivedAtUtc", latest_event."ReceivedAtUtc") AS "LastSeenAtUtc",
+                    active_session."SessionId" AS "ActiveSessionId",
+                    latest_raw."Protocol" AS "Protocol",
+                    latest_raw."MessageType" AS "LastMessageType",
+                    latest_position."OccurredAtUtc" AS "LastPositionOccurredAtUtc",
+                    latest_position."ReceivedAtUtc" AS "LastPositionReceivedAtUtc",
+                    latest_position."GpsTimeUtc" AS "LastPositionGpsTimeUtc",
+                    latest_position."Latitude" AS "LastPositionLatitude",
+                    latest_position."Longitude" AS "LastPositionLongitude",
+                    latest_position."SpeedKmh" AS "LastPositionSpeedKmh",
+                    latest_position."HeadingDeg" AS "LastPositionHeadingDeg",
+                    latest_position."PacketId" AS "LastPositionPacketId",
+                    latest_position."SessionId" AS "LastPositionSessionId"
+                FROM user_devices ud
+                LEFT JOIN LATERAL
+                (
+                    SELECT
+                        session_id AS "SessionId",
+                        last_seen_at_utc AS "LastSeenAtUtc"
+                    FROM device_sessions
+                    WHERE imei = ud.imei
+                      AND is_active = TRUE
+                    ORDER BY last_seen_at_utc DESC, session_id ASC
+                    LIMIT 1
+                ) active_session ON TRUE
+                LEFT JOIN LATERAL
+                (
+                    SELECT
+                        protocol AS "Protocol",
+                        message_type AS "MessageType",
+                        received_at_utc AS "ReceivedAtUtc"
+                    FROM raw_packets
+                    WHERE imei = ud.imei
+                    ORDER BY received_at_utc DESC, packet_id DESC
+                    LIMIT 1
+                ) latest_raw ON TRUE
+                LEFT JOIN LATERAL
+                (
+                    SELECT
+                        p.gps_time_utc AS "OccurredAtUtc",
+                        rp.received_at_utc AS "ReceivedAtUtc",
+                        p.gps_time_utc AS "GpsTimeUtc",
+                        p.latitude::DOUBLE PRECISION AS "Latitude",
+                        p.longitude::DOUBLE PRECISION AS "Longitude",
+                        p.speed_kmh AS "SpeedKmh",
+                        p.heading_deg AS "HeadingDeg",
+                        p.packet_id AS "PacketId",
+                        p.session_id AS "SessionId"
+                    FROM positions p
+                    INNER JOIN raw_packets rp
+                        ON rp.packet_id = p.packet_id
+                    WHERE p.imei = ud.imei
+                      AND p.latitude IS NOT NULL
+                      AND p.longitude IS NOT NULL
+                    ORDER BY p.gps_time_utc DESC, rp.received_at_utc DESC, p.position_id DESC
+                    LIMIT 1
+                ) latest_position ON TRUE
+                LEFT JOIN LATERAL
+                (
+                    SELECT
+                        received_at_utc AS "ReceivedAtUtc"
+                    FROM device_events
+                    WHERE imei = ud.imei
+                    ORDER BY received_at_utc DESC, event_id DESC
+                    LIMIT 1
+                ) latest_event ON TRUE
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = TRUE
+                ORDER BY ud.bound_at_utc DESC, ud.imei ASC;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetHasActiveDeviceBindingSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP 1 1
+                FROM user_devices
+                WHERE user_id = @UserId
+                  AND imei = @Imei
+                  AND is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT 1
+                FROM user_devices
+                WHERE user_id = @UserId
+                  AND imei = @Imei
+                  AND is_active = TRUE
+                LIMIT 1;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetTelemetryPositionsSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP (@Limit)
+                    p.gps_time_utc AS OccurredAtUtc,
+                    rp.received_at_utc AS ReceivedAtUtc,
+                    p.gps_time_utc AS GpsTimeUtc,
+                    CAST(p.latitude AS FLOAT) AS Latitude,
+                    CAST(p.longitude AS FLOAT) AS Longitude,
+                    p.speed_kmh AS SpeedKmh,
+                    p.heading_deg AS HeadingDeg,
+                    p.packet_id AS PacketId,
+                    p.session_id AS SessionId
+                FROM positions p
+                INNER JOIN raw_packets rp
+                    ON rp.packet_id = p.packet_id
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = 1
+                   AND ud.imei = p.imei
+                WHERE p.gps_time_utc >= @FromUtc
+                  AND p.gps_time_utc <= @ToUtc
+                  AND p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                ORDER BY p.gps_time_utc DESC, rp.received_at_utc DESC, p.position_id DESC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    p.gps_time_utc AS "OccurredAtUtc",
+                    rp.received_at_utc AS "ReceivedAtUtc",
+                    p.gps_time_utc AS "GpsTimeUtc",
+                    p.latitude::DOUBLE PRECISION AS "Latitude",
+                    p.longitude::DOUBLE PRECISION AS "Longitude",
+                    p.speed_kmh AS "SpeedKmh",
+                    p.heading_deg AS "HeadingDeg",
+                    p.packet_id AS "PacketId",
+                    p.session_id AS "SessionId"
+                FROM positions p
+                INNER JOIN raw_packets rp
+                    ON rp.packet_id = p.packet_id
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = TRUE
+                   AND ud.imei = p.imei
+                WHERE p.gps_time_utc >= @FromUtc
+                  AND p.gps_time_utc <= @ToUtc
+                  AND p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                ORDER BY p.gps_time_utc DESC, rp.received_at_utc DESC, p.position_id DESC
                 LIMIT @Limit;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetTelemetryEventsSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP (@Limit)
+                    ev.event_id AS EventId,
+                    ev.received_at_utc AS OccurredAtUtc,
+                    ev.received_at_utc AS ReceivedAtUtc,
+                    ev.event_code AS EventCode,
+                    ev.payload_text AS PayloadText,
+                    ev.protocol AS Protocol,
+                    ev.message_type AS MessageType,
+                    ev.packet_id AS PacketId,
+                    ev.session_id AS SessionId
+                FROM device_events ev
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = 1
+                   AND ud.imei = ev.imei
+                WHERE ev.received_at_utc >= @FromUtc
+                  AND ev.received_at_utc <= @ToUtc
+                ORDER BY ev.received_at_utc DESC, ev.event_id DESC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    ev.event_id AS "EventId",
+                    ev.received_at_utc AS "OccurredAtUtc",
+                    ev.received_at_utc AS "ReceivedAtUtc",
+                    ev.event_code AS "EventCode",
+                    ev.payload_text AS "PayloadText",
+                    ev.protocol AS "Protocol",
+                    ev.message_type AS "MessageType",
+                    ev.packet_id AS "PacketId",
+                    ev.session_id AS "SessionId"
+                FROM device_events ev
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = TRUE
+                   AND ud.imei = ev.imei
+                WHERE ev.received_at_utc >= @FromUtc
+                  AND ev.received_at_utc <= @ToUtc
+                ORDER BY ev.received_at_utc DESC, ev.event_id DESC
+                LIMIT @Limit;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetTelemetryTripCandidatesSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT TOP (@MaxPoints)
+                    p.gps_time_utc AS OccurredAtUtc,
+                    rp.received_at_utc AS ReceivedAtUtc,
+                    p.gps_time_utc AS GpsTimeUtc,
+                    CAST(p.latitude AS FLOAT) AS Latitude,
+                    CAST(p.longitude AS FLOAT) AS Longitude,
+                    p.speed_kmh AS SpeedKmh,
+                    p.heading_deg AS HeadingDeg,
+                    p.packet_id AS PacketId,
+                    p.session_id AS SessionId
+                FROM positions p
+                INNER JOIN raw_packets rp
+                    ON rp.packet_id = p.packet_id
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = 1
+                   AND ud.imei = p.imei
+                WHERE p.gps_time_utc >= @FromUtc
+                  AND p.gps_time_utc <= @ToUtc
+                  AND p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                ORDER BY p.gps_time_utc ASC, rp.received_at_utc ASC, p.position_id ASC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    p.gps_time_utc AS "OccurredAtUtc",
+                    rp.received_at_utc AS "ReceivedAtUtc",
+                    p.gps_time_utc AS "GpsTimeUtc",
+                    p.latitude::DOUBLE PRECISION AS "Latitude",
+                    p.longitude::DOUBLE PRECISION AS "Longitude",
+                    p.speed_kmh AS "SpeedKmh",
+                    p.heading_deg AS "HeadingDeg",
+                    p.packet_id AS "PacketId",
+                    p.session_id AS "SessionId"
+                FROM positions p
+                INNER JOIN raw_packets rp
+                    ON rp.packet_id = p.packet_id
+                INNER JOIN user_devices ud
+                    ON ud.user_id = @UserId
+                   AND ud.imei = @Imei
+                   AND ud.is_active = TRUE
+                   AND ud.imei = p.imei
+                WHERE p.gps_time_utc >= @FromUtc
+                  AND p.gps_time_utc <= @ToUtc
+                  AND p.latitude IS NOT NULL
+                  AND p.longitude IS NOT NULL
+                ORDER BY p.gps_time_utc ASC, rp.received_at_utc ASC, p.position_id ASC
+                LIMIT @MaxPoints;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
@@ -1940,6 +2672,94 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         public long AckSent { get; set; }
 
         public long Backlog { get; set; }
+    }
+
+    private sealed class PlanRow
+    {
+        public Guid PlanId { get; set; }
+
+        public string Code { get; set; } = string.Empty;
+
+        public string Name { get; set; } = string.Empty;
+
+        public int MaxGps { get; set; }
+
+        public bool IsActive { get; set; }
+    }
+
+    private sealed class TelemetryDeviceSummaryRow
+    {
+        public string Imei { get; set; } = string.Empty;
+
+        public DateTimeOffset BoundAtUtc { get; set; }
+
+        public DateTimeOffset? LastSeenAtUtc { get; set; }
+
+        public Guid? ActiveSessionId { get; set; }
+
+        public int? Protocol { get; set; }
+
+        public int? LastMessageType { get; set; }
+
+        public DateTimeOffset? LastPositionOccurredAtUtc { get; set; }
+
+        public DateTimeOffset? LastPositionReceivedAtUtc { get; set; }
+
+        public DateTimeOffset? LastPositionGpsTimeUtc { get; set; }
+
+        public double? LastPositionLatitude { get; set; }
+
+        public double? LastPositionLongitude { get; set; }
+
+        public double? LastPositionSpeedKmh { get; set; }
+
+        public int? LastPositionHeadingDeg { get; set; }
+
+        public Guid? LastPositionPacketId { get; set; }
+
+        public Guid? LastPositionSessionId { get; set; }
+    }
+
+    private sealed class TelemetryPositionRow
+    {
+        public DateTimeOffset OccurredAtUtc { get; set; }
+
+        public DateTimeOffset ReceivedAtUtc { get; set; }
+
+        public DateTimeOffset? GpsTimeUtc { get; set; }
+
+        public double Latitude { get; set; }
+
+        public double Longitude { get; set; }
+
+        public double? SpeedKmh { get; set; }
+
+        public int? HeadingDeg { get; set; }
+
+        public Guid PacketId { get; set; }
+
+        public Guid SessionId { get; set; }
+    }
+
+    private sealed class TelemetryEventRow
+    {
+        public Guid EventId { get; set; }
+
+        public DateTimeOffset OccurredAtUtc { get; set; }
+
+        public DateTimeOffset ReceivedAtUtc { get; set; }
+
+        public string EventCode { get; set; } = string.Empty;
+
+        public string PayloadText { get; set; } = string.Empty;
+
+        public int Protocol { get; set; }
+
+        public int MessageType { get; set; }
+
+        public Guid PacketId { get; set; }
+
+        public Guid SessionId { get; set; }
     }
 
     private sealed class UserSummaryRow

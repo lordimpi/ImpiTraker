@@ -1,4 +1,4 @@
-using ImpiTrack.Auth.Infrastructure.Email.Models;
+﻿using ImpiTrack.Auth.Infrastructure.Email.Models;
 
 namespace ImpiTrack.Auth.Infrastructure.Email.Contracts;
 
@@ -16,4 +16,15 @@ public interface IEmailTemplateRenderer
     /// <param name="token">Token de confirmacion de Identity.</param>
     /// <returns>Mensaje listo para encolar.</returns>
     EmailMessage BuildVerifyEmailMessage(Guid userId, string email, string userName, string token);
+
+    /// <summary>
+    /// Construye el correo de recuperacion de contrasena.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="email">Correo destino.</param>
+    /// <param name="userName">Nombre de usuario.</param>
+    /// <param name="token">Token de reset emitido por Identity.</param>
+    /// <returns>Mensaje listo para encolar.</returns>
+    EmailMessage BuildResetPasswordMessage(Guid userId, string email, string userName, string token);
 }
+

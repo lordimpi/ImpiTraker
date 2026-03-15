@@ -10,10 +10,17 @@ public interface IAdminUsersService
     /// <summary>
     /// Lista usuarios con estado de plan y cuota.
     /// </summary>
-    /// <param name="limit">Maximo de filas.</param>
+    /// <param name="query">Consulta paginada con filtros y ordenamiento.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
     /// <returns>Usuarios encontrados.</returns>
-    Task<IReadOnlyList<UserAccountOverview>> GetUsersAsync(int limit, CancellationToken cancellationToken);
+    Task<PagedResult<UserAccountOverview>> GetUsersAsync(AdminUserListQuery query, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lista planes administrables para la UI.
+    /// </summary>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Catalogo de planes activos.</returns>
+    Task<IReadOnlyList<AdminPlanDto>> GetPlansAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Obtiene resumen de un usuario.
@@ -22,6 +29,14 @@ public interface IAdminUsersService
     /// <param name="cancellationToken">Token de cancelacion.</param>
     /// <returns>Resumen o <c>null</c> si el usuario no existe.</returns>
     Task<UserAccountSummary?> GetUserSummaryAsync(Guid userId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene los dispositivos vinculados a un usuario.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Lista de vinculos activos o <c>null</c> si el usuario no existe.</returns>
+    Task<IReadOnlyList<UserDeviceBinding>?> GetUserDevicesAsync(Guid userId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Asigna plan activo a un usuario.

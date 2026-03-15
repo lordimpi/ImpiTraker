@@ -56,15 +56,18 @@ public sealed class CantrackProtocolParser : IProtocolParser
         double? longitude = null;
         double? speedKmh = null;
         int? headingDeg = null;
+        bool isTelemetryUsable = true;
+        string? telemetryError = null;
         if (type == MessageType.Tracking)
         {
-            TryParseTrackingTelemetry(
+            isTelemetryUsable = TryParseTrackingTelemetry(
                 parts,
                 out gpsTimeUtc,
                 out latitude,
                 out longitude,
                 out speedKmh,
-                out headingDeg);
+                out headingDeg,
+                out telemetryError);
         }
 
         message = new ParsedMessage(
@@ -78,7 +81,9 @@ public sealed class CantrackProtocolParser : IProtocolParser
             latitude,
             longitude,
             speedKmh,
-            headingDeg);
+            headingDeg,
+            isTelemetryUsable,
+            telemetryError);
 
         return true;
     }
@@ -89,13 +94,21 @@ public sealed class CantrackProtocolParser : IProtocolParser
         out double? latitude,
         out double? longitude,
         out double? speedKmh,
-        out int? headingDeg)
+        out int? headingDeg,
+        out string? telemetryError)
     {
         gpsTimeUtc = null;
         latitude = null;
         longitude = null;
         speedKmh = null;
         headingDeg = null;
+        telemetryError = null;
+
+        if (fields.Count < 10)
+        {
+            telemetryError = "invalid_tracking_field_count";
+            return false;
+        }
 
         if (fields.Count > 4 &&
             fields[3].Length == 6 &&
@@ -110,13 +123,18 @@ public sealed class CantrackProtocolParser : IProtocolParser
             gpsTimeUtc = parsedGpsTime;
         }
 
-        if (fields.Count > 9 &&
-            TryParseCoordinate(fields[6], fields[7], true, out double lat) &&
-            TryParseCoordinate(fields[8], fields[9], false, out double lon))
+        if (!TryParseCoordinate(fields[6], fields[7], true, out double lat, out telemetryError))
         {
-            latitude = lat;
-            longitude = lon;
+            return false;
         }
+
+        if (!TryParseCoordinate(fields[8], fields[9], false, out double lon, out telemetryError))
+        {
+            return false;
+        }
+
+        latitude = lat;
+        longitude = lon;
 
         if (fields.Count > 10 &&
             double.TryParse(fields[10], NumberStyles.Float, CultureInfo.InvariantCulture, out double parsedSpeed))
@@ -130,20 +148,43 @@ public sealed class CantrackProtocolParser : IProtocolParser
             headingDeg = parsedHeadingDeg;
         }
 
-        return latitude.HasValue && longitude.HasValue;
+        return true;
     }
 
     private static bool TryParseCoordinate(
         string rawValue,
         string hemisphere,
         bool isLatitude,
-        out double coordinate)
+        out double coordinate,
+        out string? error)
     {
         coordinate = 0;
-        if (string.IsNullOrWhiteSpace(rawValue) ||
-            string.IsNullOrWhiteSpace(hemisphere) ||
-            !double.TryParse(rawValue, NumberStyles.Float, CultureInfo.InvariantCulture, out double nmea))
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(rawValue))
         {
+            error = isLatitude ? "invalid_latitude" : "invalid_longitude";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(hemisphere))
+        {
+            error = "invalid_hemisphere";
+            return false;
+        }
+
+        ReadOnlySpan<char> rawSpan = rawValue.Trim().AsSpan();
+        int decimalSeparatorIndex = rawSpan.IndexOf('.');
+        int minimumWholeDigits = isLatitude ? 4 : 5;
+        if (decimalSeparatorIndex < minimumWholeDigits)
+        {
+            error = isLatitude ? "invalid_latitude" : "invalid_longitude";
+            return false;
+        }
+
+        if (!double.TryParse(rawValue, NumberStyles.Float, CultureInfo.InvariantCulture, out double nmea))
+        {
+            error = "invalid_coordinate_format";
             return false;
         }
 
@@ -152,6 +193,15 @@ public sealed class CantrackProtocolParser : IProtocolParser
         double decimalDegrees = degrees + (minutes / 60d);
 
         char hemi = char.ToUpperInvariant(hemisphere[0]);
+        bool validHemisphere = isLatitude
+            ? hemi is 'N' or 'S'
+            : hemi is 'E' or 'W';
+        if (!validHemisphere)
+        {
+            error = "invalid_hemisphere";
+            return false;
+        }
+
         if (hemi is 'S' or 'W')
         {
             decimalDegrees *= -1d;
@@ -159,11 +209,13 @@ public sealed class CantrackProtocolParser : IProtocolParser
 
         if (isLatitude && (decimalDegrees < -90d || decimalDegrees > 90d))
         {
+            error = "invalid_latitude";
             return false;
         }
 
         if (!isLatitude && (decimalDegrees < -180d || decimalDegrees > 180d))
         {
+            error = "invalid_longitude";
             return false;
         }
 

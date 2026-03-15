@@ -16,6 +16,22 @@ namespace ImpiTrack.Api.Controllers;
 [Authorize(Policy = "Admin")]
 public sealed class AdminUsersController : ControllerBase
 {
+    private static readonly HashSet<string> AllowedSortBy = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "email",
+        "fullName",
+        "planCode",
+        "maxGps",
+        "usedGps",
+        "createdAt"
+    };
+
+    private static readonly HashSet<string> AllowedSortDirection = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "asc",
+        "desc"
+    };
+
     private readonly IAdminUsersService _adminUsersService;
 
     /// <summary>
@@ -28,18 +44,46 @@ public sealed class AdminUsersController : ControllerBase
     }
 
     /// <summary>
-    /// Lista usuarios con su plan actual y uso de cuota GPS.
+    /// Lista usuarios con su plan actual y uso de cuota GPS en formato paginado.
     /// </summary>
-    /// <param name="limit">Maximo de filas a retornar.</param>
+    /// <param name="page">Pagina solicitada (base 1).</param>
+    /// <param name="pageSize">Tamano de pagina.</param>
+    /// <param name="search">Busqueda parcial por correo o nombre.</param>
+    /// <param name="planCode">Filtro exacto por codigo de plan.</param>
+    /// <param name="sortBy">Campo de ordenamiento permitido.</param>
+    /// <param name="sortDirection">Direccion de ordenamiento: asc o desc.</param>
     /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
     /// <returns>Listado administrativo de usuarios.</returns>
     [HttpGet]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserAccountOverview>>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<UserAccountOverview>>>> GetUsers(
-        [FromQuery] int limit = 100,
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<UserAccountOverview>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<UserAccountOverview>>), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ApiResponse<PagedResult<UserAccountOverview>>>> GetUsers(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? search = null,
+        [FromQuery] string? planCode = null,
+        [FromQuery] string sortBy = "email",
+        [FromQuery] string sortDirection = "asc",
         CancellationToken cancellationToken = default)
     {
-        IReadOnlyList<UserAccountOverview> users = await _adminUsersService.GetUsersAsync(limit, cancellationToken);
+        if (!AllowedSortBy.Contains(sortBy))
+        {
+            return this.FailEnvelope<PagedResult<UserAccountOverview>>(
+                StatusCodes.Status400BadRequest,
+                "invalid_sort_by",
+                "El campo de ordenamiento solicitado no es valido.");
+        }
+
+        if (!AllowedSortDirection.Contains(sortDirection))
+        {
+            return this.FailEnvelope<PagedResult<UserAccountOverview>>(
+                StatusCodes.Status400BadRequest,
+                "invalid_sort_direction",
+                "La direccion de ordenamiento solicitada no es valida.");
+        }
+
+        var query = new AdminUserListQuery(page, pageSize, search, planCode, sortBy, sortDirection);
+        PagedResult<UserAccountOverview> users = await _adminUsersService.GetUsersAsync(query, cancellationToken);
         return this.OkEnvelope(users);
     }
 
@@ -66,6 +110,31 @@ public sealed class AdminUsersController : ControllerBase
         }
 
         return this.OkEnvelope(summary);
+    }
+
+    /// <summary>
+    /// Obtiene los dispositivos vinculados a un usuario especifico.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>Lista de dispositivos activos del usuario.</returns>
+    [HttpGet("{userId:guid}/devices")]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserDeviceBinding>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserDeviceBinding>>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<UserDeviceBinding>>>> GetUserDevices(
+        [FromRoute] Guid userId,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<UserDeviceBinding>? devices = await _adminUsersService.GetUserDevicesAsync(userId, cancellationToken);
+        if (devices is null)
+        {
+            return this.FailEnvelope<IReadOnlyList<UserDeviceBinding>>(
+                StatusCodes.Status404NotFound,
+                "user_not_found",
+                "No existe la cuenta solicitada.");
+        }
+
+        return this.OkEnvelope(devices);
     }
 
     /// <summary>
