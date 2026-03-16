@@ -12,6 +12,7 @@
 *.env
 /Documents
 .artifacts/
+.atl/
 .dotnet/
 .codex/
 .planning/

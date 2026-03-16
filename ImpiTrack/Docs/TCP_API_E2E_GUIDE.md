@@ -1,4 +1,12 @@
+Role: runbook  
+Status: active  
+Owner: backend-maintainers  
+Last Reviewed: 2026-03-15  
+When to use: validate the backend locally across API, TCP ingestion, and Ops endpoints
+
 # Guia E2E: API + TCP Server (IMPITrack)
+
+Canonical state note: this is an operational runbook. For the current backend/runtime truth, use [`CURRENT_STATE.md`](CURRENT_STATE.md).
 
 Esta guia valida backend local completo: auth, vinculacion de GPS, ingesta TCP y observabilidad Ops.
 

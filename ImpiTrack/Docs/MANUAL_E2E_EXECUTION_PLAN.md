@@ -1,4 +1,12 @@
+Role: runbook  
+Status: active  
+Owner: backend-maintainers  
+Last Reviewed: 2026-03-15  
+When to use: execute a full manual end-to-end validation with copy/paste commands
+
 # Manual E2E Execution Plan (Backend)
+
+Canonical state note: this is a procedure document. For the current backend/runtime truth, use [`CURRENT_STATE.md`](CURRENT_STATE.md).
 
 Este runbook ejecuta una prueba E2E manual completa para IMPITrack en local:
 - API (Auth + Me + Ops)
