@@ -1,3 +1,4 @@
+using ImpiTrack.Application.Abstractions;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
@@ -101,6 +102,34 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
 
             return Task.FromResult(new PersistEnvelopeResult(PersistEnvelopeStatus.Persisted));
         }
+    }
+
+    /// <inheritdoc />
+    public Task InsertDeviceIoEventAsync(DeviceIoEventRecord record, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string imei = record.Imei.Trim();
+        if (string.IsNullOrWhiteSpace(imei) || !_activeImeiOwners.ContainsKey(imei))
+        {
+            return Task.CompletedTask;
+        }
+
+        lock (_sync)
+        {
+            List<StoredEvent> events = _eventsByImei.GetOrAdd(imei, static _ => []);
+            events.Add(new StoredEvent(
+                Guid.NewGuid(),
+                record.PacketId.Value,
+                record.SessionId.Value,
+                record.Protocol,
+                MessageType.Tracking,
+                record.EventCode,
+                record.PayloadText,
+                record.ReceivedAtUtc));
+        }
+
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -494,6 +523,22 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
             .ToArray();
 
         return Task.FromResult(rows);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<AccEventDto>> GetAccEventsForWindowAsync(
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // El repositorio en memoria retorna lista vacia: los eventos ACC en memoria
+        // estan almacenados en _eventsByImei pero no tienen una estructura que
+        // permita filtrar por event_code de forma eficiente. El algoritmo de BuildTrips
+        // detecta correctamente IgnitionOn=null y cae en modo fallback de velocidad+2D.
+        return Task.FromResult<IReadOnlyList<AccEventDto>>([]);
     }
 
     /// <inheritdoc />

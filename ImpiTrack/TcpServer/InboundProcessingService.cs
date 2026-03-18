@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using ImpiTrack.DataAccess.Abstractions;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using ImpiTrack.Observability;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Configuration;
@@ -9,6 +9,14 @@ using ImpiTrack.Tcp.Core.EventBus;
 using ImpiTrack.Tcp.Core.Queue;
 
 namespace TcpServer;
+
+/// <summary>
+/// Estado de E/S conocido por IMEI para deteccion de transiciones ACC/PWR/Door.
+/// </summary>
+/// <param name="IgnitionOn">Ultimo estado de encendido conocido. Null si no se ha recibido dato.</param>
+/// <param name="PowerConnected">Ultima conexion de alimentacion conocida. Null si no disponible.</param>
+/// <param name="DoorOpen">Ultimo estado de puerta conocido. Null si no disponible.</param>
+internal sealed record DeviceIoState(bool? IgnitionOn, bool? PowerConnected, bool? DoorOpen);
 
 /// <summary>
 /// Servicio consumidor en segundo plano que drena envelopes de la cola entrante.
@@ -23,6 +31,7 @@ public sealed class InboundProcessingService : BackgroundService
     private readonly EventBusOptions _eventBusOptions;
     private readonly int _workerCount;
     private readonly ConcurrentDictionary<string, byte> _simulatedFailureOnceTracker = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DeviceIoState> _lastKnownState = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Crea un servicio consumidor de cola usando la concurrencia de workers configurada.
@@ -155,7 +164,10 @@ public sealed class InboundProcessingService : BackgroundService
             envelope.Message.Longitude,
             envelope.Message.SpeedKmh,
             envelope.Message.HeadingDeg,
-            envelope.PacketId);
+            envelope.PacketId,
+            envelope.Message.IgnitionOn,
+            envelope.Message.PowerConnected,
+            envelope.Message.DoorOpen);
 
         await PublishWithRetryAsync(
             telemetryTopic,
@@ -174,6 +186,93 @@ public sealed class InboundProcessingService : BackgroundService
                 "status_v1",
                 cancellationToken);
         }
+
+        // B.7: Detect ACC/PWR/Door state transitions and persist device_events records.
+        if (envelope.Message.MessageType == MessageType.Tracking)
+        {
+            await DetectAndPersistStateChangesAsync(imei, envelope, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Detecta cambios en ACC/PWR/Door comparando el estado actual con el ultimo estado conocido
+    /// y persiste un registro en device_events por cada transicion detectada.
+    /// </summary>
+    private async Task DetectAndPersistStateChangesAsync(
+        string imei,
+        InboundEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
+        ParsedMessage msg = envelope.Message;
+        _lastKnownState.TryGetValue(imei, out DeviceIoState? previous);
+
+        bool? prevIgnition = previous?.IgnitionOn;
+        bool? currIgnition = msg.IgnitionOn;
+        bool? prevPower = previous?.PowerConnected;
+        bool? currPower = msg.PowerConnected;
+
+        // Detect IgnitionOn transition: null→true, false→true, true→false
+        if (currIgnition.HasValue && currIgnition != prevIgnition)
+        {
+            string eventCode = currIgnition.Value ? "ACC_ON" : "ACC_OFF";
+            var ioEvent = new DeviceIoEventRecord(
+                imei,
+                eventCode,
+                msg.Protocol,
+                envelope.PacketId,
+                envelope.SessionId,
+                msg.GpsTimeUtc ?? msg.ReceivedAtUtc,
+                msg.ReceivedAtUtc,
+                msg.Text);
+
+            try
+            {
+                await _ingestionRepository.InsertDeviceIoEventAsync(ioEvent, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "device_io_event_persist_error imei={imei} eventCode={eventCode}",
+                    imei,
+                    eventCode);
+            }
+        }
+
+        // Detect PowerConnected transition: null→true, false→true, true→false
+        if (currPower.HasValue && currPower != prevPower)
+        {
+            string eventCode = currPower.Value ? "PWR_ON" : "PWR_OFF";
+            var ioEvent = new DeviceIoEventRecord(
+                imei,
+                eventCode,
+                msg.Protocol,
+                envelope.PacketId,
+                envelope.SessionId,
+                msg.GpsTimeUtc ?? msg.ReceivedAtUtc,
+                msg.ReceivedAtUtc,
+                msg.Text);
+
+            try
+            {
+                await _ingestionRepository.InsertDeviceIoEventAsync(ioEvent, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "device_io_event_persist_error imei={imei} eventCode={eventCode}",
+                    imei,
+                    eventCode);
+            }
+        }
+
+        // Update last known state for this IMEI.
+        // Preserve previous values for fields where the current message has no data (null).
+        _lastKnownState[imei] = new DeviceIoState(
+            currIgnition ?? prevIgnition,
+            currPower ?? prevPower,
+            msg.DoorOpen ?? previous?.DoorOpen);
     }
 
     private async Task PublishWithRetryAsync<TPayload>(

@@ -110,6 +110,10 @@ public sealed class CantrackProtocolParser : IProtocolParser
             return false;
         }
 
+        // GpsTimeUtc: Cantrack field[3] = YYMMDD (UTC date from GPS clock),
+        // field[4] = HHMMSS.sss (UTC time from GPS clock).
+        // Both fields are already UTC — no timezone offset or day-rollover adjustment needed
+        // (unlike Coban which embeds local time in its timestamp field).
         if (fields.Count > 4 &&
             fields[3].Length == 6 &&
             fields[4].Length >= 6 &&
@@ -147,6 +151,13 @@ public sealed class CantrackProtocolParser : IProtocolParser
         {
             headingDeg = parsedHeadingDeg;
         }
+
+        // B.5: Cantrack packet format (V1/V series) fields [0..11] do not include a confirmed ACC bit.
+        // Known field indices: [0]=*VT, [1]=IMEI, [2]=V1, [3]=YYMMDD, [4]=HHMMSS.sss,
+        // [5]=validity(A/V), [6]=lat, [7]=N/S, [8]=lon, [9]=E/W, [10]=speed, [11]=heading.
+        // Fields [12+] exist in some Cantrack variants but their meaning has not been confirmed
+        // against real hardware packets. IgnitionOn, PowerConnected, and DoorOpen are left null
+        // until a real Cantrack packet with ACC/PWR/Door data is captured and field indices confirmed.
 
         return true;
     }

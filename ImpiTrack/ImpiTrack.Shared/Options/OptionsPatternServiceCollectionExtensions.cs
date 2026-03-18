@@ -3,7 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
-namespace ImpiTrack.DataAccess.IOptionPattern;
+namespace ImpiTrack.Shared.Options;
 
 /// <summary>
 /// Extensiones para registrar y vincular opciones tipadas con validacion de inicio.

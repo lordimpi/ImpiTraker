@@ -20,6 +20,9 @@ namespace ImpiTrack.Protocols.Abstractions;
 /// <param name="SpeedKmh">Velocidad en km/h cuando aplica.</param>
 /// <param name="HeadingDeg">Rumbo en grados cuando aplica.</param>
 /// <param name="RawPacketId">Referencia al paquete raw persistido.</param>
+/// <param name="IgnitionOn">Estado del ACC del vehiculo. Null si el protocolo no lo provee.</param>
+/// <param name="PowerConnected">Indica si el dispositivo tiene alimentacion externa. Null si no disponible.</param>
+/// <param name="DoorOpen">Indica si la puerta esta abierta. Null si el protocolo no lo provee.</param>
 public sealed record TelemetryEventV1(
     string EventVersion,
     Guid EventId,
@@ -37,7 +40,10 @@ public sealed record TelemetryEventV1(
     double? Longitude,
     double? SpeedKmh,
     int? HeadingDeg,
-    PacketId RawPacketId);
+    PacketId RawPacketId,
+    bool? IgnitionOn = null,
+    bool? PowerConnected = null,
+    bool? DoorOpen = null);
 
 /// <summary>
 /// Estado de dispositivo publicado por el pipeline interno.

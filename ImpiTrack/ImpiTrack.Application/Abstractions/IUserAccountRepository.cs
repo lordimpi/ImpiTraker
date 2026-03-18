@@ -1,4 +1,4 @@
-namespace ImpiTrack.DataAccess.Abstractions;
+namespace ImpiTrack.Application.Abstractions;
 
 /// <summary>
 /// Operaciones de cuenta de usuario, plan y vinculacion de GPS.
@@ -93,4 +93,3 @@ public interface IUserAccountRepository
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken);
 }
-

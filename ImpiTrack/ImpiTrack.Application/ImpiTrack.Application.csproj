@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\ImpiTrack.DataAccess\ImpiTrack.DataAccess.csproj" />
+    <ProjectReference Include="..\ImpiTrack.Protocols.Abstractions\ImpiTrack.Protocols.Abstractions.csproj" />
     <ProjectReference Include="..\ImpiTrack.Shared\ImpiTrack.Shared.csproj" />
   </ItemGroup>
 

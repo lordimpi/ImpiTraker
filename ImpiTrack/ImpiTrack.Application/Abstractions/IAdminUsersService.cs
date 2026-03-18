@@ -1,5 +1,3 @@
-using ImpiTrack.DataAccess.Abstractions;
-
 namespace ImpiTrack.Application.Abstractions;
 
 /// <summary>

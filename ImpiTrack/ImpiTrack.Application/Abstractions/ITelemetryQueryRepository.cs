@@ -1,4 +1,4 @@
-namespace ImpiTrack.DataAccess.Abstractions;
+namespace ImpiTrack.Application.Abstractions;
 
 /// <summary>
 /// Consultas de telemetria funcional para consumo de la API publica.
@@ -74,5 +74,20 @@ public interface ITelemetryQueryRepository
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
         int maxPoints,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene eventos ACC (ACC_ON / ACC_OFF) de un IMEI dentro de una ventana temporal.
+    /// Usado para anotar posiciones candidatas con el estado de encendido del vehiculo.
+    /// </summary>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="fromUtc">Inicio UTC del rango.</param>
+    /// <param name="toUtc">Fin UTC del rango.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Eventos ACC ordenados cronologicamente de forma ascendente.</returns>
+    Task<IReadOnlyList<AccEventDto>> GetAccEventsForWindowAsync(
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
         CancellationToken cancellationToken);
 }

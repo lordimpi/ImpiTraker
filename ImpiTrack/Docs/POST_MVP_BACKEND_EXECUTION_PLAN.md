@@ -1,4 +1,12 @@
+Role: history  
+Status: historical  
+Owner: backend-maintainers  
+Last Reviewed: 2026-03-15  
+Replaced by: [`CURRENT_STATE.md`](CURRENT_STATE.md)
+
 # Plan de Ejecucion Post-MVP Backend: Mapa y Telemetria
+
+Historical note: this plan captures a post-MVP planning snapshot. It is NOT the current backend source of truth.
 
 ## 1. Objetivo
 Definir la ejecucion post-MVP del backend para habilitar monitoreo funcional read-only sobre dispositivos GPS ya vinculados. Esta fase expone APIs publicas y seguras para resumen de telemetria, ultima posicion, historial de posiciones y eventos recientes.

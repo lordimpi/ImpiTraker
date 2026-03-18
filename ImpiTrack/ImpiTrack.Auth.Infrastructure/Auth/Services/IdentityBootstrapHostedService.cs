@@ -1,7 +1,7 @@
 ﻿using ImpiTrack.Auth.Infrastructure.Configuration;
 using ImpiTrack.Auth.Infrastructure.Identity;
-using ImpiTrack.DataAccess.Abstractions;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Application.Abstractions;
+using ImpiTrack.Shared.Options;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;

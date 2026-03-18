@@ -1,7 +1,7 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
-namespace ImpiTrack.DataAccess.IOptionPattern;
+namespace ImpiTrack.Shared.Options;
 
 /// <summary>
 /// Implementación base para recuperar opciones estáticas, snapshot y monitoreadas.

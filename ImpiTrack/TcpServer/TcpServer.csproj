@@ -30,5 +30,6 @@
     <ProjectReference Include="..\ImpiTrack.Observability\ImpiTrack.Observability.csproj" />
     <ProjectReference Include="..\ImpiTrack.Ops\ImpiTrack.Ops.csproj" />
     <ProjectReference Include="..\ImpiTrack.DataAccess\ImpiTrack.DataAccess.csproj" />
+    <ProjectReference Include="..\ImpiTrack.Shared\ImpiTrack.Shared.csproj" />
   </ItemGroup>
 </Project>

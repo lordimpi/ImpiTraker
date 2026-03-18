@@ -1,0 +1,2 @@
+ALTER TABLE device_events
+    ADD COLUMN IF NOT EXISTS occurred_at_utc TIMESTAMPTZ NULL;

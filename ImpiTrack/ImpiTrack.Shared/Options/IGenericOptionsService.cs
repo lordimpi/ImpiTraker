@@ -1,4 +1,4 @@
-﻿namespace ImpiTrack.DataAccess.IOptionPattern;
+namespace ImpiTrack.Shared.Options;
 
 /// <summary>
 /// Contrato genérico para acceder a opciones estáticas, por snapshot y monitoreadas.

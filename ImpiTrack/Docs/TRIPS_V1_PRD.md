@@ -1,4 +1,11 @@
+Role: history  
+Status: historical  
+Owner: backend-maintainers  
+Last Reviewed: 2026-03-15
+
 # PRD Backend: Recorridos Vehiculares V1
+
+Historical note: this PRD is preserved for product context. It is not the current backend/runtime truth.
 
 ## Resumen
 

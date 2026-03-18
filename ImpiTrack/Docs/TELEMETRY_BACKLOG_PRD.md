@@ -1,4 +1,11 @@
+Role: history  
+Status: historical  
+Owner: backend-maintainers  
+Last Reviewed: 2026-03-15
+
 # PRD de Pendientes: Telemetria y Recorridos
+
+Historical note: this backlog PRD is preserved for planning context. It is not the current backend/runtime truth.
 
 ## Resumen
 

@@ -1,4 +1,11 @@
+Role: adr  
+Status: active  
+Owner: backend-maintainers  
+Last Reviewed: 2026-03-15
+
 # ADR-001: Habilitacion de Identity sobre PostgreSQL
+
+Canonical scope note: this ADR records a decision boundary. For the live backend/runtime snapshot, also consult [`CURRENT_STATE.md`](CURRENT_STATE.md).
 
 ## Estado
 Aceptado (planificado, no habilitado de forma general).

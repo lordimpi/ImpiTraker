@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Dapper;
+using ImpiTrack.Application.Abstractions;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.Configuration;
 using ImpiTrack.DataAccess.Connection;
@@ -236,7 +237,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     MessageType = (int)envelope.Message.MessageType,
                     EventCode = envelope.Message.MessageType.ToString(),
                     PayloadText = envelope.Message.Text,
-                    ReceivedAtUtc = envelope.Message.ReceivedAtUtc
+                    ReceivedAtUtc = envelope.Message.ReceivedAtUtc,
+                    OccurredAtUtc = envelope.Message.GpsTimeUtc ?? envelope.Message.ReceivedAtUtc
                 },
                 transaction,
                 _context.CommandTimeoutSeconds,
@@ -257,6 +259,52 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
             await transaction.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task InsertDeviceIoEventAsync(DeviceIoEventRecord record, CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        Guid? deviceId = null;
+        if (!string.IsNullOrWhiteSpace(record.Imei))
+        {
+            // Resolve device_id without a transaction — best-effort lookup only.
+            // If the device is not registered, we skip the insert silently.
+            CommandDefinition resolveCommand = new(
+                GetOwnedDeviceByImeiSql(_context.Provider),
+                new { Imei = record.Imei },
+                commandTimeout: _context.CommandTimeoutSeconds,
+                cancellationToken: cancellationToken);
+
+            deviceId = await connection.ExecuteScalarAsync<Guid?>(resolveCommand);
+        }
+
+        if (deviceId is null)
+        {
+            return;
+        }
+
+        CommandDefinition insertEvent = new(
+            GetInsertEventSql(),
+            new
+            {
+                EventId = Guid.NewGuid(),
+                PacketId = record.PacketId.Value,
+                SessionId = record.SessionId.Value,
+                DeviceId = deviceId,
+                Imei = record.Imei,
+                Protocol = (int)record.Protocol,
+                MessageType = (int)MessageType.Tracking,
+                EventCode = record.EventCode,
+                PayloadText = record.PayloadText,
+                ReceivedAtUtc = record.ReceivedAtUtc,
+                OccurredAtUtc = record.OccurredAtUtc
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        await connection.ExecuteAsync(insertEvent);
     }
 
     /// <inheritdoc />
@@ -737,6 +785,31 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<AccEventDto>> GetAccEventsForWindowAsync(
+        string imei,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetAccEventsForWindowSql(_context.Provider),
+            new
+            {
+                Imei = imei.Trim(),
+                FromUtc = fromUtc,
+                ToUtc = toUtc
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<AccEventRow> rows = await connection.QueryAsync<AccEventRow>(command);
+        return rows
+            .Select(x => new AccEventDto(x.OccurredAtUtc, string.Equals(x.EventCode, "ACC_ON", StringComparison.Ordinal)))
+            .ToArray();
+    }
+
+    /// <inheritdoc />
     public async Task<bool> SetUserPlanAsync(
         Guid userId,
         string planCode,
@@ -1130,12 +1203,12 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
             INSERT INTO device_events
             (
                 event_id, packet_id, session_id, device_id, imei, protocol, message_type,
-                event_code, payload_text, received_at_utc
+                event_code, payload_text, received_at_utc, occurred_at_utc
             )
             VALUES
             (
                 @EventId, @PacketId, @SessionId, @DeviceId, @Imei, @Protocol, @MessageType,
-                @EventCode, @PayloadText, @ReceivedAtUtc
+                @EventCode, @PayloadText, @ReceivedAtUtc, @OccurredAtUtc
             );
             """;
     }
@@ -2148,7 +2221,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 """
                 SELECT TOP (@Limit)
                     ev.event_id AS EventId,
-                    ev.received_at_utc AS OccurredAtUtc,
+                    COALESCE(ev.occurred_at_utc, ev.received_at_utc) AS OccurredAtUtc,
                     ev.received_at_utc AS ReceivedAtUtc,
                     ev.event_code AS EventCode,
                     ev.payload_text AS PayloadText,
@@ -2164,13 +2237,13 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                    AND ud.imei = ev.imei
                 WHERE ev.received_at_utc >= @FromUtc
                   AND ev.received_at_utc <= @ToUtc
-                ORDER BY ev.received_at_utc DESC, ev.event_id DESC;
+                ORDER BY COALESCE(ev.occurred_at_utc, ev.received_at_utc) DESC, ev.event_id DESC;
                 """,
             DatabaseProvider.Postgres =>
                 """
                 SELECT
                     ev.event_id AS "EventId",
-                    ev.received_at_utc AS "OccurredAtUtc",
+                    COALESCE(ev.occurred_at_utc, ev.received_at_utc) AS "OccurredAtUtc",
                     ev.received_at_utc AS "ReceivedAtUtc",
                     ev.event_code AS "EventCode",
                     ev.payload_text AS "PayloadText",
@@ -2186,7 +2259,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                    AND ud.imei = ev.imei
                 WHERE ev.received_at_utc >= @FromUtc
                   AND ev.received_at_utc <= @ToUtc
-                ORDER BY ev.received_at_utc DESC, ev.event_id DESC
+                ORDER BY COALESCE(ev.occurred_at_utc, ev.received_at_utc) DESC, ev.event_id DESC
                 LIMIT @Limit;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
@@ -2249,6 +2322,36 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                   AND p.longitude IS NOT NULL
                 ORDER BY p.gps_time_utc ASC, rp.received_at_utc ASC, p.position_id ASC
                 LIMIT @MaxPoints;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetAccEventsForWindowSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    COALESCE(ev.occurred_at_utc, ev.received_at_utc) AS OccurredAtUtc,
+                    ev.event_code AS EventCode
+                FROM device_events ev
+                WHERE ev.imei = @Imei
+                  AND ev.event_code IN ('ACC_ON', 'ACC_OFF')
+                  AND COALESCE(ev.occurred_at_utc, ev.received_at_utc) BETWEEN @FromUtc AND @ToUtc
+                ORDER BY COALESCE(ev.occurred_at_utc, ev.received_at_utc) ASC;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    COALESCE(ev.occurred_at_utc, ev.received_at_utc) AS "OccurredAtUtc",
+                    ev.event_code AS "EventCode"
+                FROM device_events ev
+                WHERE ev.imei = @Imei
+                  AND ev.event_code IN ('ACC_ON', 'ACC_OFF')
+                  AND COALESCE(ev.occurred_at_utc, ev.received_at_utc) BETWEEN @FromUtc AND @ToUtc
+                ORDER BY COALESCE(ev.occurred_at_utc, ev.received_at_utc) ASC;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
@@ -2800,6 +2903,13 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         public int MaxGps { get; set; }
 
         public int UsedGps { get; set; }
+    }
+
+    private sealed class AccEventRow
+    {
+        public DateTimeOffset OccurredAtUtc { get; set; }
+
+        public string EventCode { get; set; } = string.Empty;
     }
 
     private sealed class UserOverviewRow

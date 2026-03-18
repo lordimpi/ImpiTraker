@@ -1,6 +1,6 @@
 using ImpiTrack.Protocols.Abstractions;
 
-namespace ImpiTrack.DataAccess.Abstractions;
+namespace ImpiTrack.Application.Abstractions;
 
 /// <summary>
 /// Resumen de telemetria expuesto para un dispositivo vinculado.
@@ -56,6 +56,7 @@ public sealed record LastKnownPositionDto(
 /// <param name="HeadingDeg">Rumbo en grados cuando existe.</param>
 /// <param name="PacketId">Identificador del paquete correlacionado.</param>
 /// <param name="SessionId">Identificador de la sesion correlacionada.</param>
+/// <param name="IgnitionOn">Estado del ACC al momento de la muestra. Null si no hay informacion de ACC disponible.</param>
 public sealed record DevicePositionPointDto(
     DateTimeOffset OccurredAtUtc,
     DateTimeOffset ReceivedAtUtc,
@@ -65,7 +66,8 @@ public sealed record DevicePositionPointDto(
     double? SpeedKmh,
     int? HeadingDeg,
     Guid PacketId,
-    Guid SessionId);
+    Guid SessionId,
+    bool? IgnitionOn = null);
 
 /// <summary>
 /// Evento reciente asociado a un dispositivo.
@@ -89,6 +91,15 @@ public sealed record DeviceEventDto(
     MessageType MessageType,
     Guid PacketId,
     Guid SessionId);
+
+/// <summary>
+/// Evento de estado de ACC (encendido/apagado) extraido de device_events para uso en deteccion de viajes.
+/// </summary>
+/// <param name="OccurredAtUtc">Timestamp UTC del evento ACC (preferred: occurred_at_utc, fallback: received_at_utc).</param>
+/// <param name="IsOn">Verdadero si el evento es ACC_ON, falso si es ACC_OFF.</param>
+public sealed record AccEventDto(
+    DateTimeOffset OccurredAtUtc,
+    bool IsOn);
 
 /// <summary>
 /// Resumen legible de un recorrido vehicular construido desde telemetria historica.
