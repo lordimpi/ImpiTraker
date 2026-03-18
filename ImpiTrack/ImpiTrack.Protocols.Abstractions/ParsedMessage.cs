@@ -16,6 +16,9 @@ namespace ImpiTrack.Protocols.Abstractions;
 /// <param name="HeadingDeg">Rumbo en grados cuando aplica.</param>
 /// <param name="IsTelemetryUsable">Indica si el mensaje puede derivarse de forma util a telemetria funcional.</param>
 /// <param name="TelemetryError">Codigo corto de error cuando un tracking no es util para telemetria.</param>
+/// <param name="IgnitionOn">Estado del ACC (encendido del vehiculo). Null si el protocolo no provee este campo.</param>
+/// <param name="PowerConnected">Indica si el dispositivo tiene alimentacion externa conectada. Null si no disponible.</param>
+/// <param name="DoorOpen">Indica si la puerta esta abierta. Null si el protocolo no provee este campo.</param>
 public sealed record ParsedMessage(
     ProtocolId Protocol,
     MessageType MessageType,
@@ -29,4 +32,7 @@ public sealed record ParsedMessage(
     double? SpeedKmh = null,
     int? HeadingDeg = null,
     bool IsTelemetryUsable = true,
-    string? TelemetryError = null);
+    string? TelemetryError = null,
+    bool? IgnitionOn = null,
+    bool? PowerConnected = null,
+    bool? DoorOpen = null);

@@ -1,7 +1,29 @@
 using ImpiTrack.Ops;
+using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Queue;
 
 namespace ImpiTrack.DataAccess.Abstractions;
+
+/// <summary>
+/// Registro de evento de E/S de dispositivo (ACC, PWR, Door) para persistencia directa en device_events.
+/// </summary>
+/// <param name="Imei">IMEI del dispositivo origen.</param>
+/// <param name="EventCode">Codigo canonico del evento: ACC_ON, ACC_OFF, PWR_ON, PWR_OFF, DOOR_OPEN, DOOR_CLOSED.</param>
+/// <param name="Protocol">Protocolo de origen del paquete que origino el evento.</param>
+/// <param name="PacketId">Identificador del paquete GPS que origino el cambio de estado.</param>
+/// <param name="SessionId">Identificador de sesion TCP del paquete origen.</param>
+/// <param name="OccurredAtUtc">Timestamp GPS UTC del evento (GpsTimeUtc del paquete).</param>
+/// <param name="ReceivedAtUtc">Timestamp de recepcion del paquete.</param>
+/// <param name="PayloadText">Payload textual de respaldo (texto del paquete original).</param>
+public sealed record DeviceIoEventRecord(
+    string Imei,
+    string EventCode,
+    ProtocolId Protocol,
+    PacketId PacketId,
+    SessionId SessionId,
+    DateTimeOffset OccurredAtUtc,
+    DateTimeOffset ReceivedAtUtc,
+    string PayloadText);
 
 /// <summary>
 /// Resultado de persistencia de un envelope downstream.
@@ -57,4 +79,12 @@ public interface IIngestionRepository
     /// <param name="cancellationToken">Token de cancelacion.</param>
     /// <returns>Resultado de persistencia para telemetria/evento deduplicado.</returns>
     Task<PersistEnvelopeResult> PersistEnvelopeAsync(InboundEnvelope envelope, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Inserta un evento de E/S de dispositivo (ACC/PWR/Door) en device_events.
+    /// Usado para persistir transiciones de estado detectadas por el pipeline de ingesta.
+    /// </summary>
+    /// <param name="record">Registro del evento de E/S a persistir.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    Task InsertDeviceIoEventAsync(DeviceIoEventRecord record, CancellationToken cancellationToken);
 }

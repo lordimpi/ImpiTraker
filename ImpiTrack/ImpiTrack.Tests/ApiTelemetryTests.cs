@@ -241,7 +241,7 @@ public sealed class ApiTelemetryTests
         Assert.True(detailPayload!.Success);
         Assert.NotNull(detailPayload.Data);
         Assert.Equal(tripId, detailPayload.Data!.TripId);
-        Assert.Equal("movement_gap_v1", detailPayload.Data.SourceRule);
+        Assert.Equal("movement_2d_acc_v2", detailPayload.Data.SourceRule);
         Assert.True(detailPayload.Data.PathPoints.Count >= 2);
     }
 

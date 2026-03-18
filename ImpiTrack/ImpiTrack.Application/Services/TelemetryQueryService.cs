@@ -19,9 +19,14 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
     private const int MaxTripsLimit = 200;
     private const int MaxTripCandidatePoints = 5000;
     private static readonly TimeSpan TripGapThreshold = TimeSpan.FromMinutes(10);
-    private const double MovingSpeedThresholdKmh = 5d;
-    private const double MovingDistanceThresholdMeters = 100d;
-    private const string TripSourceRule = "movement_gap_v1";
+
+    /// <summary>Umbral de velocidad para detectar movimiento. Elegido en 12 km/h para filtrar deriva GPS en vehiculos detenidos.</summary>
+    private const double MovingSpeedThresholdKmh = 12d;
+
+    /// <summary>Umbral por eje en grados decimales para deteccion 2D de movimiento. 0.00018° ≈ 20m a latitudes ecuatoriales.</summary>
+    private const double MovingAreaThresholdDeg = 0.00018d;
+
+    private const string TripSourceRule = "movement_2d_acc_v2";
 
     private readonly ITelemetryQueryRepository _telemetryQueryRepository;
     private readonly IIdentityUserLookup _identityUserLookup;
@@ -226,7 +231,8 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
             DefaultTripsLimit,
             MaxTripsLimit);
 
-        IReadOnlyList<DevicePositionPointDto> items = await _telemetryQueryRepository.GetTripCandidatePositionsAsync(
+        // Consultar posiciones y eventos ACC en paralelo para minimizar latencia.
+        Task<IReadOnlyList<DevicePositionPointDto>> positionsTask = _telemetryQueryRepository.GetTripCandidatePositionsAsync(
             userId,
             normalizedImei,
             fromValue,
@@ -234,7 +240,52 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
             MaxTripCandidatePoints,
             cancellationToken);
 
-        return new TelemetryLookupResult<IReadOnlyList<DevicePositionPointDto>>(TelemetryLookupStatus.Success, items);
+        Task<IReadOnlyList<AccEventDto>> accEventsTask = _telemetryQueryRepository.GetAccEventsForWindowAsync(
+            normalizedImei,
+            fromValue,
+            toValue,
+            cancellationToken);
+
+        await Task.WhenAll(positionsTask, accEventsTask);
+
+        IReadOnlyList<DevicePositionPointDto> positions = positionsTask.Result;
+        IReadOnlyList<AccEventDto> accEvents = accEventsTask.Result;
+
+        // Anotar posiciones con el estado IgnitionOn derivado del evento ACC mas reciente anterior a cada punto.
+        IReadOnlyList<DevicePositionPointDto> annotated = accEvents.Count == 0
+            ? positions
+            : AnnotateWithAccState(positions, accEvents);
+
+        return new TelemetryLookupResult<IReadOnlyList<DevicePositionPointDto>>(TelemetryLookupStatus.Success, annotated);
+    }
+
+    /// <summary>
+    /// Anota cada posicion con el ultimo estado ACC conocido previo a su timestamp.
+    /// Si no hay ningun evento ACC anterior a una posicion, IgnitionOn queda como null.
+    /// </summary>
+    private static IReadOnlyList<DevicePositionPointDto> AnnotateWithAccState(
+        IReadOnlyList<DevicePositionPointDto> positions,
+        IReadOnlyList<AccEventDto> accEvents)
+    {
+        // accEvents ya viene ordenado ASC por OccurredAtUtc desde el repositorio.
+        DevicePositionPointDto[] result = new DevicePositionPointDto[positions.Count];
+        int i = 0;
+        int accIndex = 0;
+        bool? currentAccState = null;
+
+        foreach (DevicePositionPointDto point in positions.OrderBy(x => x.OccurredAtUtc).ThenBy(x => x.ReceivedAtUtc))
+        {
+            // Avanzar el puntero de eventos ACC hasta el ultimo evento anterior o igual al timestamp del punto.
+            while (accIndex < accEvents.Count && accEvents[accIndex].OccurredAtUtc <= point.OccurredAtUtc)
+            {
+                currentAccState = accEvents[accIndex].IsOn;
+                accIndex++;
+            }
+
+            result[i++] = point with { IgnitionOn = currentAccState };
+        }
+
+        return result;
     }
 
     private static IReadOnlyList<BuiltTrip> BuildTrips(
@@ -247,22 +298,40 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
             return [];
         }
 
+        // Determinar si hay datos ACC disponibles en la secuencia.
+        // Si todos los puntos tienen IgnitionOn=null → modo fallback puro (velocidad + 2D).
+        bool hasAccData = candidates.Any(x => x.IgnitionOn.HasValue);
+
         List<BuiltTrip> trips = [];
         List<DevicePositionPointDto>? current = null;
         DevicePositionPointDto? previous = null;
         DevicePositionPointDto? previousMoving = null;
+        bool? previousIgnitionState = null;
 
         foreach (DevicePositionPointDto point in candidates.OrderBy(x => x.OccurredAtUtc).ThenBy(x => x.ReceivedAtUtc))
         {
             bool isMoving = IsMovingPoint(previous, point);
 
+            // Detectar transicion ACC: true→true no es transicion, false→true O null→true = ACC_ON event.
+            bool isAccOn = hasAccData
+                && point.IgnitionOn == true
+                && previousIgnitionState != true;
+
+            // Detectar ACC_OFF: transicion de true a false (o null si el ultimo conocido era true).
+            bool isAccOff = hasAccData
+                && point.IgnitionOn == false
+                && previousIgnitionState == true;
+
             if (current is null)
             {
-                if (isMoving)
+                // Abrir viaje: ACC_ON es señal primaria, movimiento 2D/velocidad es secundario.
+                bool shouldOpen = isAccOn || (!hasAccData && isMoving);
+                if (shouldOpen)
                 {
                     current = [];
-                    if (previous is not null)
+                    if (previous is not null && !isAccOn)
                     {
+                        // Solo incluir punto anterior como cabeza del viaje en modo speed/2D.
                         current.Add(previous);
                     }
 
@@ -270,6 +339,7 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
                 }
 
                 previous = point;
+                previousIgnitionState = point.IgnitionOn ?? previousIgnitionState;
                 if (isMoving)
                 {
                     previousMoving = point;
@@ -278,20 +348,38 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
                 continue;
             }
 
+            // Cerrar viaje por ACC_OFF: señal primaria de fin.
+            if (isAccOff)
+            {
+                current.Add(point);
+                AddTripIfValid(trips, imei, current, nowUtc);
+                current = null;
+                previous = point;
+                previousIgnitionState = false;
+                previousMoving = null;
+                continue;
+            }
+
+            // Cerrar viaje por gap temporal (logica existente de brecha).
             DevicePositionPointDto reference = previousMoving ?? current[^1];
             if (point.OccurredAtUtc - reference.OccurredAtUtc > TripGapThreshold)
             {
                 AddTripIfValid(trips, imei, current, nowUtc);
-                current = isMoving
+
+                // Abrir nuevo viaje inmediatamente si hay movimiento o ACC_ON en el punto actual.
+                bool shouldOpenNext = isAccOn || (!hasAccData && isMoving);
+                current = shouldOpenNext
                     ? previous is not null ? [previous, point] : [point]
                     : null;
                 previous = point;
+                previousIgnitionState = point.IgnitionOn ?? previousIgnitionState;
                 previousMoving = isMoving ? point : null;
                 continue;
             }
 
             current.Add(point);
             previous = point;
+            previousIgnitionState = point.IgnitionOn ?? previousIgnitionState;
             if (isMoving)
             {
                 previousMoving = point;
@@ -342,6 +430,12 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
             avgSpeed));
     }
 
+    /// <summary>
+    /// Determina si un punto GPS representa movimiento real respecto al punto anterior.
+    /// Criterio primario: velocidad >= 12 km/h.
+    /// Criterio secundario: ambos ejes lat Y lon superan el umbral de 0.00018° (≈20m) — requiere movimiento en AMBAS dimensiones
+    /// para filtrar deriva GPS de un solo eje.
+    /// </summary>
     private static bool IsMovingPoint(DevicePositionPointDto? previous, DevicePositionPointDto current)
     {
         if (current.SpeedKmh.GetValueOrDefault() >= MovingSpeedThresholdKmh)
@@ -354,27 +448,10 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
             return false;
         }
 
-        return CalculateDistanceMeters(previous.Latitude, previous.Longitude, current.Latitude, current.Longitude)
-            >= MovingDistanceThresholdMeters;
+        // Deteccion 2D: ambos ejes deben superar el umbral. Un solo eje = ruido GPS, no movimiento real.
+        return Math.Abs(current.Latitude - previous.Latitude) >= MovingAreaThresholdDeg
+            && Math.Abs(current.Longitude - previous.Longitude) >= MovingAreaThresholdDeg;
     }
-
-    private static double CalculateDistanceMeters(double lat1, double lon1, double lat2, double lon2)
-    {
-        const double EarthRadiusMeters = 6371000d;
-        double dLat = DegreesToRadians(lat2 - lat1);
-        double dLon = DegreesToRadians(lon2 - lon1);
-        double startLat = DegreesToRadians(lat1);
-        double endLat = DegreesToRadians(lat2);
-
-        double a =
-            Math.Pow(Math.Sin(dLat / 2d), 2d) +
-            Math.Cos(startLat) * Math.Cos(endLat) * Math.Pow(Math.Sin(dLon / 2d), 2d);
-
-        double c = 2d * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1d - a));
-        return EarthRadiusMeters * c;
-    }
-
-    private static double DegreesToRadians(double degrees) => degrees * (Math.PI / 180d);
 
     private static string CreateTripId(string imei, DateTimeOffset startedAtUtc, Guid firstPacketId)
     {
