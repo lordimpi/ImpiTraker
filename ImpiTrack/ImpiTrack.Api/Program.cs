@@ -7,7 +7,7 @@ using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.Configuration;
 using ImpiTrack.DataAccess.Connection;
 using ImpiTrack.DataAccess.Extensions;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using ImpiTrack.Shared.Api;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;

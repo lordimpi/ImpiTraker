@@ -15,9 +15,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\ImpiTrack.Application\ImpiTrack.Application.csproj" />
     <ProjectReference Include="..\ImpiTrack.Ops\ImpiTrack.Ops.csproj" />
     <ProjectReference Include="..\ImpiTrack.Tcp.Core\ImpiTrack.Tcp.Core.csproj" />
     <ProjectReference Include="..\ImpiTrack.Protocols.Abstractions\ImpiTrack.Protocols.Abstractions.csproj" />
+    <ProjectReference Include="..\ImpiTrack.Shared\ImpiTrack.Shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>

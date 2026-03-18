@@ -1,5 +1,5 @@
 using ImpiTrack.DataAccess.Configuration;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using Microsoft.Extensions.Configuration;
 
 namespace ImpiTrack.DataAccess.Connection;

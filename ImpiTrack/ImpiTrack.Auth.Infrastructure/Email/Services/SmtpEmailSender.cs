@@ -5,7 +5,7 @@ using System.Text;
 using ImpiTrack.Auth.Infrastructure.Configuration;
 using ImpiTrack.Auth.Infrastructure.Email.Contracts;
 using ImpiTrack.Auth.Infrastructure.Email.Models;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using Microsoft.Extensions.Logging;
 
 namespace ImpiTrack.Auth.Infrastructure.Email.Services;

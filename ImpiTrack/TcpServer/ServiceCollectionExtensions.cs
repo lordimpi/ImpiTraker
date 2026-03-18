@@ -1,5 +1,5 @@
 ﻿using ImpiTrack.DataAccess.Extensions;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Protocols.Cantrack;
 using ImpiTrack.Protocols.Coban;

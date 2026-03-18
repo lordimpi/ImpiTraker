@@ -4,7 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using ImpiTrack.DataAccess.Abstractions;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using ImpiTrack.Observability;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;

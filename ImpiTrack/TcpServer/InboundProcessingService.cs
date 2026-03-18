@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using ImpiTrack.DataAccess.Abstractions;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using ImpiTrack.Observability;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Configuration;

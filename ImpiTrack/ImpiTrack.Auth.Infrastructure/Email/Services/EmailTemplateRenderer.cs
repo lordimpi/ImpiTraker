@@ -1,7 +1,7 @@
 ﻿using ImpiTrack.Auth.Infrastructure.Configuration;
 using ImpiTrack.Auth.Infrastructure.Email.Contracts;
 using ImpiTrack.Auth.Infrastructure.Email.Models;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using System.Net;
 
 namespace ImpiTrack.Auth.Infrastructure.Email.Services;

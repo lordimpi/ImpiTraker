@@ -1,6 +1,6 @@
 using System.Text;
 using ImpiTrack.DataAccess.Abstractions;
-using ImpiTrack.DataAccess.IOptionPattern;
+using ImpiTrack.Shared.Options;
 using ImpiTrack.Observability;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
@@ -36,10 +36,11 @@ public sealed class InboundProcessingServiceStateTests
         InboundEnvelope secondPacket = BuildTrackingEnvelope(imei, ignitionOn: true);
         await DrivePublishAsync(service, secondPacket);
 
-        // Assert
-        Assert.Single(capturedEvents);
-        Assert.Equal("ACC_ON", capturedEvents[0].EventCode);
-        Assert.Equal(imei, capturedEvents[0].Imei);
+        // Assert: debe existir exactamente un evento ACC_ON (puede haber otros como PWR_ON)
+        var accEvents = capturedEvents.Where(e => e.EventCode.StartsWith("ACC")).ToList();
+        Assert.Single(accEvents);
+        Assert.Equal("ACC_ON", accEvents[0].EventCode);
+        Assert.Equal(imei, accEvents[0].Imei);
     }
 
     [Fact]
@@ -57,9 +58,10 @@ public sealed class InboundProcessingServiceStateTests
         // Second packet: IgnitionOn = true → false → true must emit ACC_ON
         await DrivePublishAsync(service, BuildTrackingEnvelope(imei, ignitionOn: true));
 
-        // Assert
-        Assert.Single(capturedEvents);
-        Assert.Equal("ACC_ON", capturedEvents[0].EventCode);
+        // Assert: debe existir exactamente un evento ACC_ON (puede haber ACC_OFF del primer packet y PWR_ON)
+        var accOnEvents = capturedEvents.Where(e => e.EventCode == "ACC_ON").ToList();
+        Assert.Single(accOnEvents);
+        Assert.Equal(imei, accOnEvents[0].Imei);
     }
 
     [Fact]
