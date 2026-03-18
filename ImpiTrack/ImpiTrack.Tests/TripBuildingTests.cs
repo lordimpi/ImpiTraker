@@ -1,6 +1,5 @@
 using ImpiTrack.Application.Abstractions;
 using ImpiTrack.Application.Services;
-using ImpiTrack.DataAccess.Abstractions;
 
 namespace ImpiTrack.Tests;
 
@@ -52,9 +51,11 @@ public sealed class TripBuildingTests
         // P1 y P2 solo difieren en latitud (lon idéntica) → solo un eje → ruido GPS
         // P1 y P3 solo difieren en longitud (lat idéntica) → solo un eje → ruido GPS
         // Todos tienen speed < 12 → no hay movimiento por velocidad tampoco
+        // P1→P2: dLat=0.0002 > 0.00018 (supera), dLon=0 (no supera) → solo lat → no movimiento
+        // P2→P3: dLat=0 (no supera), dLon=0.0001 < 0.00018 (no supera) → ningún eje → no movimiento
         var p1 = MakePoint(Base, lat: 4.6000, lon: -74.1000, speed: 5);
         var p2 = MakePoint(Base.AddMinutes(1), lat: 4.6002, lon: -74.1000, speed: 5); // solo lat cambia
-        var p3 = MakePoint(Base.AddMinutes(2), lat: 4.6000, lon: -74.0998, speed: 5); // solo lon cambia
+        var p3 = MakePoint(Base.AddMinutes(2), lat: 4.6002, lon: -74.1001, speed: 5); // solo lon cambia, delta=0.0001 < 0.00018
 
         var service = BuildService([p1, p2, p3], accEvents: []);
 

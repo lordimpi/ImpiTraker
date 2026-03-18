@@ -2,7 +2,6 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ImpiTrack.Api.Http;
 using ImpiTrack.Application.Abstractions;
-using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.Shared.Api;
 using ImpiTrack.Shared.Models;
 using Microsoft.AspNetCore.Authorization;

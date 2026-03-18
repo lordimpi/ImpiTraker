@@ -56,6 +56,40 @@ Current repository structure verified from `ImpiTrack/ImpiTrack.sln` and project
 - verification:
   - `ImpiTrack/ImpiTrack.Tests`
 
+### 3.1 Project Dependency Graph
+
+Verified from `.csproj` project references as of 2026-03-18:
+
+```
+Protocols.Abstractions   ← no dependencies
+Shared                   ← no dependencies  (Options pattern + HTTP DTOs)
+Application              → Shared, Protocols.Abstractions
+DataAccess               → Application, Ops, Tcp.Core, Protocols.Abstractions, Shared
+Auth.Infrastructure      → DataAccess, Shared, Application
+Api                      → Ops, DataAccess, Shared, Application, Auth.Infrastructure
+TcpServer                → Tcp.Core, Protocols.Coban, Protocols.Cantrack, Protocols.Abstractions,
+                           Observability, Ops, DataAccess, Shared
+Tests                    → Tcp.Core, Protocols.Abstractions, Protocols.Coban, Protocols.Cantrack,
+                           Ops, DataAccess, Api, TcpServer
+```
+
+Key architectural constraints enforced:
+
+- `Application` does **not** reference `DataAccess`. Repository interfaces (`IUserAccountRepository`, `ITelemetryQueryRepository`) live in `Application.Abstractions/` and are implemented by `DataAccess`. This satisfies the Dependency Inversion Principle: the domain layer defines the contract; the infrastructure layer implements it.
+- `Shared` does **not** reference any other project in this solution. It holds cross-cutting concerns with no inward dependencies: the Options pattern (`IGenericOptionsService`, `GenericOptionsService` in `ImpiTrack.Shared.Options`) and shared HTTP DTOs.
+- `DataAccess` references `Application` (to implement its repository contracts) and `Tcp.Core` (for `IIngestionRepository` which depends on the TCP queue).
+
+### 3.2 Abstractions Placement
+
+| Abstraction | Namespace | Project | Reason |
+|---|---|---|---|
+| `IUserAccountRepository` | `ImpiTrack.Application.Abstractions` | `Application` | Domain contract, implemented by DataAccess |
+| `ITelemetryQueryRepository` | `ImpiTrack.Application.Abstractions` | `Application` | Domain contract, implemented by DataAccess |
+| `TelemetryModels`, `UserAccountModels` | `ImpiTrack.Application.Abstractions` | `Application` | Domain models shared between service and repo layers |
+| `IIngestionRepository` | `ImpiTrack.DataAccess` | `DataAccess` | Infrastructure-only; depends on `Tcp.Core.Queue` — intentionally kept in DataAccess |
+| `IOpsRepository`, `IDbConnectionFactory`, `IMigrationRunner` | `ImpiTrack.DataAccess` | `DataAccess` | Pure infrastructure contracts with no domain meaning |
+| `IGenericOptionsService`, `GenericOptionsService` | `ImpiTrack.Shared.Options` | `Shared` | Cross-cutting; used by TcpServer and DataAccess without circular deps |
+
 Operational shape today:
 
 1. GPS devices talk to `TcpServer` over TCP.
@@ -219,3 +253,4 @@ This current-state document was aligned against the repository structure and exi
 - `ImpiTrack/ImpiTrack.DataAccess/db/sqlserver/V007__device_events_occurred_at.sql`
 - `ImpiTrack/Docs/BACKEND_MAINTENANCE_GUIDE.md` (superseded by this file)
 - the active solution/project layout under `ImpiTrack/`
+- all `.csproj` project references (verified 2026-03-18, post `abstractions-placement-refactor`)

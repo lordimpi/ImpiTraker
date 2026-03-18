@@ -3,7 +3,7 @@
 Role: index  
 Status: active  
 Owner: backend-maintainers  
-Last Reviewed: 2026-03-15
+Last Reviewed: 2026-03-18
 
 This README is the stable entry point for project documentation.
 
@@ -20,6 +20,131 @@ This README is the stable entry point for project documentation.
 - Backend repo only; frontend is out of scope for this repository.
 - Runtime shape today: `TcpServer` + `ImpiTrack.Api` + shared data/auth/observability libraries.
 - Current dev defaults in repo config: SQL Server for API and TCP persistence, SQL Server for Identity, EMQX enabled in TCP development settings, OpenAPI + Scalar enabled in API Development.
+
+## Architecture
+
+### System Layers
+
+```mermaid
+graph TB
+    subgraph Devices["GPS Devices"]
+        D[GPS Device<br/>Coban / Cantrack]
+    end
+
+    subgraph TCP["TCP Layer"]
+        TC[TcpServer<br/>Worker Service]
+        TCore[Tcp.Core<br/>framing · queue · pipeline]
+        PC[Protocols.Coban]
+        PCA[Protocols.Cantrack]
+        PA[Protocols.Abstractions<br/>ParsedMessage contract]
+    end
+
+    subgraph App["Application Layer"]
+        AL[Application<br/>services · domain contracts]
+        SH[Shared<br/>Options · HTTP DTOs]
+    end
+
+    subgraph Infra["Infrastructure Layer"]
+        DA[DataAccess<br/>Dapper · SQL Server · PostgreSQL]
+        AI[Auth.Infrastructure<br/>ASP.NET Identity · JWT]
+        OBS[Observability<br/>OpenTelemetry]
+        OPS[Ops<br/>health · diagnostics]
+    end
+
+    subgraph API["HTTP Layer"]
+        AP[ImpiTrack.Api<br/>REST · OpenAPI · Scalar]
+    end
+
+    D -->|TCP| TC
+    TC --> TCore
+    TC --> PC
+    TC --> PCA
+    PC --> PA
+    PCA --> PA
+    TC --> DA
+    TC --> SH
+
+    AL --> SH
+    AL --> PA
+
+    DA --> AL
+    DA --> TCore
+
+    AI --> DA
+    AI --> AL
+    AI --> SH
+
+    AP --> DA
+    AP --> AL
+    AP --> AI
+    AP --> OPS
+    AP --> SH
+
+    TC --> OBS
+    TC --> OPS
+```
+
+### Project Dependency Graph
+
+Shows direct `<ProjectReference>` edges between projects (verified from `.csproj` files):
+
+```mermaid
+graph LR
+    PA[Protocols.Abstractions]
+    SH[Shared]
+    AL[Application]
+    DA[DataAccess]
+    TC[Tcp.Core]
+    PC[Protocols.Coban]
+    PCA[Protocols.Cantrack]
+    OBS[Observability]
+    OPS[Ops]
+    AI[Auth.Infrastructure]
+    AP[Api]
+    TS[TcpServer]
+    TST[Tests]
+
+    AL --> PA
+    AL --> SH
+
+    DA --> AL
+    DA --> OPS
+    DA --> TC
+    DA --> PA
+    DA --> SH
+
+    AI --> DA
+    AI --> SH
+    AI --> AL
+
+    AP --> OPS
+    AP --> DA
+    AP --> SH
+    AP --> AL
+    AP --> AI
+
+    TS --> TC
+    TS --> PA
+    TS --> PC
+    TS --> PCA
+    TS --> OBS
+    TS --> OPS
+    TS --> DA
+    TS --> SH
+
+    TST --> TC
+    TST --> PA
+    TST --> PC
+    TST --> PCA
+    TST --> OPS
+    TST --> DA
+    TST --> AP
+    TST --> TS
+```
+
+`Protocols.Abstractions` and `Shared` have no inward project dependencies. `Application` does not reference `DataAccess` — repository interfaces are defined in `Application.Abstractions/` and implemented by `DataAccess`, satisfying Dependency Inversion.
+
+For the full architecture narrative, see [`ImpiTrack/Docs/CURRENT_STATE.md`](ImpiTrack/Docs/CURRENT_STATE.md).
 
 ## Documentation Rules
 

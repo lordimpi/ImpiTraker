@@ -1,6 +1,6 @@
 using ImpiTrack.Protocols.Abstractions;
 
-namespace ImpiTrack.DataAccess.Abstractions;
+namespace ImpiTrack.Application.Abstractions;
 
 /// <summary>
 /// Resumen de telemetria expuesto para un dispositivo vinculado.

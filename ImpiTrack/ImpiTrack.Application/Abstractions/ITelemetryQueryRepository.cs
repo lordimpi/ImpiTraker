@@ -1,4 +1,4 @@
-namespace ImpiTrack.DataAccess.Abstractions;
+namespace ImpiTrack.Application.Abstractions;
 
 /// <summary>
 /// Consultas de telemetria funcional para consumo de la API publica.

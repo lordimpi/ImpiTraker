@@ -1,4 +1,4 @@
-namespace ImpiTrack.DataAccess.Abstractions;
+namespace ImpiTrack.Application.Abstractions;
 
 /// <summary>
 /// Resumen de cuenta del usuario autenticado.
@@ -134,4 +134,3 @@ public enum BindDeviceStatus
 public sealed record BindDeviceResult(
     BindDeviceStatus Status,
     Guid? DeviceId);
-
