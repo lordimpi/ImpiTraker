@@ -118,6 +118,8 @@ public sealed class InboundProcessingServiceStateTests
             EnableDlq = false
         });
 
+        var presenceOptions = new StubOptionsService<DevicePresenceOptions>(new DevicePresenceOptions());
+
         return new InboundProcessingService(
             NullLogger<InboundProcessingService>.Instance,
             new InMemoryInboundQueue(capacity: 100),
@@ -125,6 +127,7 @@ public sealed class InboundProcessingServiceStateTests
             new NoOpTcpMetrics(),
             new InMemoryEventBus(),
             new NullTelemetryNotifier(NullLogger<NullTelemetryNotifier>.Instance),
+            new DevicePresenceTracker(presenceOptions),
             tcpOptions,
             eventBusOptions);
     }

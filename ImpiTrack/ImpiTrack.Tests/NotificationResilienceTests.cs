@@ -72,6 +72,8 @@ public sealed class NotificationResilienceTests
             EnableDlq = false
         });
 
+        var presenceOptions = new StubOptionsService<DevicePresenceOptions>(new DevicePresenceOptions());
+
         return new InboundProcessingService(
             NullLogger<InboundProcessingService>.Instance,
             new InMemoryInboundQueue(capacity: 100),
@@ -79,6 +81,7 @@ public sealed class NotificationResilienceTests
             new NoOpTcpMetrics(),
             new InMemoryEventBus(),
             notifier,
+            new DevicePresenceTracker(presenceOptions),
             tcpOptions,
             eventBusOptions);
     }

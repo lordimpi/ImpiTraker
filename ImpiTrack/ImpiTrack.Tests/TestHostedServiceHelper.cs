@@ -14,7 +14,8 @@ internal static class TestHostedServiceHelper
     [
         typeof(Worker),
         typeof(InboundProcessingService),
-        typeof(RawPacketProcessingService)
+        typeof(RawPacketProcessingService),
+        typeof(DevicePresenceMonitor)
     ];
 
     /// <summary>

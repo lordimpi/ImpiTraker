@@ -127,9 +127,18 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<ITelemetryNotifier, NullTelemetryNotifier>();
 
+        services
+            .BindOptions<DevicePresenceOptions>(
+                configuration,
+                DevicePresenceOptions.SectionName,
+                validateDataAnnotations: false,
+                validateOnStart: false);
+        services.TryAddSingleton<IDevicePresenceTracker, DevicePresenceTracker>();
+
         services.AddHostedService<Worker>();
         services.AddHostedService<InboundProcessingService>();
         services.AddHostedService<RawPacketProcessingService>();
+        services.AddHostedService<DevicePresenceMonitor>();
         return services;
     }
 

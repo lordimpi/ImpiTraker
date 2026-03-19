@@ -30,6 +30,7 @@ public sealed class InboundProcessingService : BackgroundService
     private readonly ITcpMetrics _tcpMetrics;
     private readonly IEventBus _eventBus;
     private readonly ITelemetryNotifier _telemetryNotifier;
+    private readonly IDevicePresenceTracker _presenceTracker;
     private readonly EventBusOptions _eventBusOptions;
     private readonly int _workerCount;
     private readonly ConcurrentDictionary<string, byte> _simulatedFailureOnceTracker = new(StringComparer.OrdinalIgnoreCase);
@@ -44,6 +45,7 @@ public sealed class InboundProcessingService : BackgroundService
     /// <param name="tcpMetrics">Publicador de metricas operativas TCP.</param>
     /// <param name="eventBus">Bus de eventos interno para contratos canonicos.</param>
     /// <param name="telemetryNotifier">Notificador de telemetria en tiempo real (SignalR o no-op).</param>
+    /// <param name="presenceTracker">Tracker de presencia online/offline de dispositivos.</param>
     /// <param name="optionsService">Opciones del servidor.</param>
     /// <param name="eventBusOptionsService">Opciones del bus de eventos.</param>
     public InboundProcessingService(
@@ -53,6 +55,7 @@ public sealed class InboundProcessingService : BackgroundService
         ITcpMetrics tcpMetrics,
         IEventBus eventBus,
         ITelemetryNotifier telemetryNotifier,
+        IDevicePresenceTracker presenceTracker,
         IGenericOptionsService<TcpServerOptions> optionsService,
         IGenericOptionsService<EventBusOptions> eventBusOptionsService)
     {
@@ -62,6 +65,7 @@ public sealed class InboundProcessingService : BackgroundService
         _tcpMetrics = tcpMetrics;
         _eventBus = eventBus;
         _telemetryNotifier = telemetryNotifier;
+        _presenceTracker = presenceTracker;
         TcpServerOptions tcpOptions = optionsService.GetOptions();
         _workerCount = Math.Max(1, tcpOptions.Pipeline.ConsumerWorkers);
 
@@ -112,6 +116,7 @@ public sealed class InboundProcessingService : BackgroundService
                 {
                     await PublishCanonicalEventsAsync(envelope, cancellationToken);
                     await NotifyRealtimeAsync(envelope, cancellationToken);
+                    await TrackDevicePresenceAsync(envelope, cancellationToken);
                 }
 
                 _logger.LogInformation(
@@ -298,6 +303,46 @@ public sealed class InboundProcessingService : BackgroundService
             currIgnition ?? prevIgnition,
             currPower ?? prevPower,
             msg.DoorOpen ?? previous?.DoorOpen);
+    }
+
+    /// <summary>
+    /// Registra actividad del dispositivo en el tracker de presencia y notifica
+    /// la transicion a online si el dispositivo estaba previamente offline o no trackeado.
+    /// Los errores se capturan y loguean sin interrumpir el pipeline.
+    /// </summary>
+    private async Task TrackDevicePresenceAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(envelope.Message.Imei))
+        {
+            return;
+        }
+
+        string imei = envelope.Message.Imei;
+
+        try
+        {
+            bool isNewlyOnline = _presenceTracker.RecordActivity(imei);
+
+            if (isNewlyOnline)
+            {
+                _logger.LogInformation(
+                    "device_presence_online imei={Imei}",
+                    imei);
+
+                await _telemetryNotifier.NotifyDeviceStatusChangedAsync(
+                    imei,
+                    "Online",
+                    DateTimeOffset.UtcNow,
+                    cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "device_presence_track_error imei={Imei}",
+                imei);
+        }
     }
 
     /// <summary>
