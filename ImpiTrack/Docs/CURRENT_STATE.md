@@ -3,7 +3,8 @@
 Role: current-state  
 Status: active  
 Owner: backend-maintainers  
-Last Reviewed: 2026-03-19
+Last Reviewed: 2026-03-19  
+Last Updated: 2026-03-19
 
 This document is the canonical source of truth for the current backend/runtime state of this repository.
 
@@ -15,10 +16,10 @@ Not canonical:
 
 ## 1. What This Repo Is
 
-IMPITrack is a backend-focused GPS telemetry platform repository. The current solution is organized around:
+IMPITrack is a backend-focused GPS telemetry platform repository. The current solution runs as a **single unified process**:
 
-- `TcpServer`: TCP ingestion service for device traffic.
-- `ImpiTrack.Api`: HTTP API for auth, admin, me, ops, health, and OpenAPI/Scalar exposure.
+- `ImpiTrack.Api`: HTTP API for auth, admin, me, ops, health, OpenAPI/Scalar, and SignalR real-time push. Hosts TCP ingestion services in-process.
+- `TcpServer`: class library (not a standalone executable) providing TCP ingestion services (`Worker`, `InboundProcessingService`, `RawPacketProcessingService`). Registered into the API host via `AddTcpServerServices()`. A `#if STANDALONE_HOST` guard in `Program.cs` preserves a standalone entry point for isolated debugging only.
 - shared libraries for application logic, auth infrastructure, SQL persistence, protocol parsing, observability, and tests.
 
 Frontend work is not part of this repository.
@@ -39,9 +40,10 @@ If a future document does not fit one of those roles, it should not be treated a
 
 Current repository structure verified from `ImpiTrack/ImpiTrack.sln` and project layout:
 
-- services:
-  - `ImpiTrack/TcpServer/TcpServer.csproj`
-  - `ImpiTrack/ImpiTrack.Api/ImpiTrack.Api.csproj`
+- host:
+  - `ImpiTrack/ImpiTrack.Api/ImpiTrack.Api.csproj` — single executable host (HTTP + TCP + SignalR)
+- class libraries (TCP ingestion):
+  - `ImpiTrack/TcpServer/TcpServer.csproj` — class library, hosted in-process by API
 - shared/backend libraries:
   - `ImpiTrack/ImpiTrack.Application`
   - `ImpiTrack/ImpiTrack.Auth.Infrastructure`
@@ -66,7 +68,7 @@ Shared                   ← no dependencies  (Options pattern + HTTP DTOs)
 Application              → Shared, Protocols.Abstractions
 DataAccess               → Application, Ops, Tcp.Core, Protocols.Abstractions, Shared
 Auth.Infrastructure      → DataAccess, Shared, Application
-Api                      → Ops, DataAccess, Shared, Application, Auth.Infrastructure
+Api                      → Ops, DataAccess, Shared, Application, Auth.Infrastructure, TcpServer
 TcpServer                → Tcp.Core, Protocols.Coban, Protocols.Cantrack, Protocols.Abstractions,
                            Observability, Ops, DataAccess, Shared
 Tests                    → Tcp.Core, Protocols.Abstractions, Protocols.Coban, Protocols.Cantrack,
@@ -89,14 +91,18 @@ Key architectural constraints enforced:
 | `IIngestionRepository` | `ImpiTrack.DataAccess` | `DataAccess` | Infrastructure-only; depends on `Tcp.Core.Queue` — intentionally kept in DataAccess |
 | `IOpsRepository`, `IDbConnectionFactory`, `IMigrationRunner` | `ImpiTrack.DataAccess` | `DataAccess` | Pure infrastructure contracts with no domain meaning |
 | `IGenericOptionsService`, `GenericOptionsService` | `ImpiTrack.Shared.Options` | `Shared` | Cross-cutting; used by TcpServer and DataAccess without circular deps |
+| `ITelemetryNotifier` | `ImpiTrack.Application.Abstractions` | `Application` | Domain contract for real-time push; implemented by `SignalRTelemetryNotifier` (Api) and `NullTelemetryNotifier` (Application, fallback) |
+| `IDeviceOwnershipResolver` | `ImpiTrack.Application.Abstractions` | `Application` | Resolves IMEI → userId(s); implemented by `CachedDeviceOwnershipResolver` (Api) |
+| `PositionUpdatedMessage`, `DeviceStatusChangedMessage`, `TelemetryEventOccurredMessage` | `ImpiTrack.Application.Abstractions` | `Application` | SignalR push DTOs in `RealtimeDtos.cs` |
 
 Operational shape today:
 
-1. GPS devices talk to `TcpServer` over TCP.
-2. TCP framing/parsing/ACK happens in the ingestion path.
-3. raw packets and normalized telemetry are persisted through `ImpiTrack.DataAccess`.
-4. `ImpiTrack.Api` reads the persisted state for auth, device ownership, health, and ops endpoints.
-5. OpenAPI and Scalar document the HTTP contract during Development.
+1. GPS devices connect to TCP listeners hosted in-process by the API (via `TcpServer` class library).
+2. TCP framing/parsing/ACK happens in the ingestion path (`Worker` → `InboundProcessingService`).
+3. Raw packets and normalized telemetry are persisted through `ImpiTrack.DataAccess`.
+4. After successful persistence, `InboundProcessingService` fires real-time notifications via `ITelemetryNotifier` (see §6.8).
+5. `ImpiTrack.Api` serves REST endpoints for auth, device ownership, health, ops, and exposes SignalR hub at `/hubs/telemetry`.
+6. OpenAPI and Scalar document the HTTP contract during Development.
 
 ## 4. Runtime State Verified In Repo
 
@@ -105,6 +111,8 @@ Operational shape today:
 - Development OpenAPI is mapped with `app.MapOpenApi()`.
 - Development Scalar UI is mapped at `/scalar/v1`.
 - Scalar is configured in `ImpiTrack/ImpiTrack.Api/Program.cs`.
+- SignalR hub mapped at `/hubs/telemetry` (authenticated, JWT via `?access_token` query string).
+- CORS: configurable origins via `Cors:AllowedOrigins` in appsettings. Uses `AllowCredentials()` — required for SignalR WebSocket transport. Previous `AllowAnyOrigin()` was incompatible with `AllowCredentials()` and was replaced.
 
 ### Development defaults
 
@@ -114,14 +122,10 @@ From `ImpiTrack/ImpiTrack.Api/appsettings.Development.json`:
 - `IdentityStorage:Provider = SqlServer`
 - `Database:EnableAutoMigrate = true`
 - `EventBus:Provider = InMemory`
-
-From `ImpiTrack/TcpServer/appsettings.Development.json`:
-
-- TCP listeners:
+- `Cors:AllowedOrigins = ["http://localhost:4200", "http://localhost:3000"]`
+- TCP listeners (hosted in-process):
   - `5001` for `COBAN`
   - `5002` for `CANTRACK`
-- `Database:Provider = SqlServer`
-- `EventBus:Provider = Emqx`
 - `TcpServerConfig:Pipeline:ConsumerWorkers = 2`
 - `TcpServerConfig:Pipeline:RawConsumerWorkers = 2`
 
@@ -247,6 +251,59 @@ Trip detection runs in `TelemetryQueryService.BuildTrips`. The active algorithm 
 3. `AnnotateWithAccState` stamps each position point with the last known ACC state prior to its timestamp.
 4. `BuildTrips` uses annotated `IgnitionOn` field to drive open/close logic; falls back to speed+2D if `hasAccData = false`.
 
+### 6.8 Real-Time Telemetry — SignalR Push Notifications
+
+Real-time push notifications are delivered to connected clients via a SignalR hub at `/hubs/telemetry`.
+
+**Architecture:**
+
+The notification chain is: `InboundProcessingService` → `ITelemetryNotifier` → `IDeviceOwnershipResolver` → `IHubContext<TelemetryHub>`.
+
+| Component | Project | Responsibility |
+|---|---|---|
+| `ITelemetryNotifier` | `Application` (abstractions) | Domain contract for push notifications |
+| `SignalRTelemetryNotifier` | `Api` (`Services/`) | Production implementation: resolves device owners, sends to SignalR groups |
+| `NullTelemetryNotifier` | `Application` (abstractions) | No-op fallback when SignalR is unavailable (e.g. TcpServer standalone mode) |
+| `IDeviceOwnershipResolver` | `Application` (abstractions) | Resolves IMEI → `IReadOnlyList<Guid>` userId(s) |
+| `CachedDeviceOwnershipResolver` | `Api` (`Services/`) | Production implementation with `IMemoryCache`, TTL 30s per IMEI |
+| `TelemetryHub` | `Api` (`Hubs/`) | SignalR hub, `[Authorize]`, groups by `user_{userId}` |
+
+**Push events (server → client, unidirectional):**
+
+| SignalR Event | Trigger | Payload |
+|---|---|---|
+| `PositionUpdated` | Each GPS tracking message persisted | `PositionUpdatedMessage(Imei, Latitude, Longitude, SpeedKmh, HeadingDeg, OccurredAtUtc, IgnitionOn)` |
+| `DeviceStatusChanged` | Device connection state change | `DeviceStatusChangedMessage(Imei, Status, ChangedAtUtc)` |
+| `TelemetryEventOccurred` | ACC/PWR state change event persisted | `TelemetryEventOccurredMessage(Imei, EventType, Latitude, Longitude, OccurredAtUtc)` |
+
+**Client authentication:** JWT is passed via `?access_token` query string parameter (standard SignalR pattern for WebSocket connections where `Authorization` header is unavailable).
+
+**User isolation:** Each authenticated client is added to group `user_{userId}` on connect. Notifications are sent only to groups corresponding to the device's owners via `IDeviceOwnershipResolver`.
+
+**Resilience:** `SignalRTelemetryNotifier` wraps every notification in try/catch. A SignalR failure (hub unavailable, client disconnected, network error) is logged but **never** interrupts the persistence pipeline. `InboundProcessingService` calls `ITelemetryNotifier` **after** successful persistence.
+
+**DI registration in API (`Program.cs`):**
+
+- `AddSignalR()` — registers SignalR infrastructure.
+- `AddMemoryCache()` — for `CachedDeviceOwnershipResolver`.
+- `AddSingleton<IDeviceOwnershipResolver, CachedDeviceOwnershipResolver>()`.
+- `AddSingleton<ITelemetryNotifier, SignalRTelemetryNotifier>()` — overrides the `NullTelemetryNotifier` default registered by `TcpServer.ServiceCollectionExtensions` via `TryAddSingleton`.
+
+**TcpServer fallback registration:** `ServiceCollectionExtensions.AddTcpServerServices()` registers `NullTelemetryNotifier` via `TryAddSingleton<ITelemetryNotifier>`. Since API registers `SignalRTelemetryNotifier` before calling `AddTcpServerServices()`, the `TryAdd` is a no-op in the unified host. In standalone debug mode, `NullTelemetryNotifier` activates as the default.
+
+### 6.9 Testing Strategy — Integration Tests With TestHostedServiceHelper
+
+Integration tests for API endpoints (`ApiAuthFlowTests`, `ApiOpsAuthTests`, `ApiRegistrationAndAccountTests`, `ApiTelemetryTests`, `ApiPasswordRecoveryTests`) use `WebApplicationFactory<Program>`. Because the API now hosts TCP services in-process, these hosted services (`Worker`, `InboundProcessingService`, `RawPacketProcessingService`) would attempt to bind TCP ports during test startup.
+
+`TestHostedServiceHelper.RemoveTcpHostedServices(IServiceCollection)` removes the three TCP `IHostedService` registrations from the DI container during test configuration, preventing port binding conflicts.
+
+SignalR-specific tests (`SignalRTelemetryNotifierTests`, `NotificationResilienceTests`) test the notification chain in isolation with mocked `IHubContext<TelemetryHub>` and stub `IDeviceOwnershipResolver`, verifying:
+
+- Correct routing to `user_{userId}` groups.
+- All three events are dispatched to the right recipients.
+- Exception resilience: notifier failures do not propagate to the caller.
+- `NullTelemetryNotifier` silently no-ops without exceptions.
+
 ## 7. Known Limits And Boundaries
 
 - Frontend is out of repo scope.
@@ -302,6 +359,17 @@ This current-state document was aligned against the repository structure and exi
 - `ImpiTrack/ImpiTrack.Application/Abstractions/UserAccountModels.cs`
 - `ImpiTrack/ImpiTrack.Application/Abstractions/TelemetryModels.cs`
 - `ImpiTrack/ImpiTrack.Shared/Models/UpdateDeviceAliasRequest.cs`
+- `ImpiTrack/ImpiTrack.Api/Hubs/TelemetryHub.cs`
+- `ImpiTrack/ImpiTrack.Api/Services/SignalRTelemetryNotifier.cs`
+- `ImpiTrack/ImpiTrack.Api/Services/CachedDeviceOwnershipResolver.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/ITelemetryNotifier.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/IDeviceOwnershipResolver.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/NullTelemetryNotifier.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/RealtimeDtos.cs`
+- `ImpiTrack/TcpServer/ServiceCollectionExtensions.cs`
+- `ImpiTrack/ImpiTrack.Tests/TestHostedServiceHelper.cs`
+- `ImpiTrack/ImpiTrack.Tests/SignalRTelemetryNotifierTests.cs`
+- `ImpiTrack/ImpiTrack.Tests/NotificationResilienceTests.cs`
 - `ImpiTrack/Docs/BACKEND_MAINTENANCE_GUIDE.md` (superseded by this file)
 - the active solution/project layout under `ImpiTrack/`
-- all `.csproj` project references (verified 2026-03-18, post `abstractions-placement-refactor`)
+- all `.csproj` project references (verified 2026-03-19, post `signalr-realtime-telemetry`)

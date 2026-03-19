@@ -526,6 +526,27 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
+    public Task<IReadOnlyList<Guid>> GetActiveUserIdsByImeiAsync(string imei, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string normalizedImei = imei.Trim();
+        List<Guid> userIds = [];
+
+        foreach (KeyValuePair<Guid, InMemoryUserAccount> kvp in _accounts)
+        {
+            bool ownsDevice = kvp.Value.Devices
+                .Any(d => string.Equals(d.Imei, normalizedImei, StringComparison.OrdinalIgnoreCase));
+            if (ownsDevice)
+            {
+                userIds.Add(kvp.Key);
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<Guid>>(userIds);
+    }
+
+    /// <inheritdoc />
     public Task<IReadOnlyList<AccEventDto>> GetAccEventsForWindowAsync(
         string imei,
         DateTimeOffset fromUtc,

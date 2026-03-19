@@ -3,7 +3,7 @@
 Role: index  
 Status: active  
 Owner: backend-maintainers  
-Last Reviewed: 2026-03-18
+Last Reviewed: 2026-03-19
 
 This README is the stable entry point for project documentation.
 
@@ -18,8 +18,8 @@ This README is the stable entry point for project documentation.
 ## Current Project Snapshot
 
 - Backend repo only; frontend is out of scope for this repository.
-- Runtime shape today: `TcpServer` + `ImpiTrack.Api` + shared data/auth/observability libraries.
-- Current dev defaults in repo config: SQL Server for API and TCP persistence, SQL Server for Identity, EMQX enabled in TCP development settings, OpenAPI + Scalar enabled in API Development.
+- Runtime shape today: single unified process — `ImpiTrack.Api` hosts HTTP, SignalR, and TCP ingestion (via `TcpServer` class library). No separate TCP process.
+- Current dev defaults in repo config: SQL Server for persistence and Identity, CORS origins configured for localhost, OpenAPI + Scalar + SignalR enabled in API Development.
 
 ## Architecture
 
@@ -31,16 +31,31 @@ graph TB
         D[GPS Device<br/>Coban / Cantrack]
     end
 
-    subgraph TCP["TCP Layer"]
-        TC[TcpServer<br/>Worker Service]
-        TCore[Tcp.Core<br/>framing · queue · pipeline]
-        PC[Protocols.Coban]
-        PCA[Protocols.Cantrack]
-        PA[Protocols.Abstractions<br/>ParsedMessage contract]
+    subgraph Clients["WebSocket Clients"]
+        C[Frontend / Mobile<br/>SignalR Client]
+    end
+
+    subgraph Host["ImpiTrack.Api — Unified Host"]
+
+        subgraph API["HTTP + SignalR Layer"]
+            AP[REST · OpenAPI · Scalar]
+            HUB[TelemetryHub<br/>/hubs/telemetry]
+            SRN[SignalRTelemetryNotifier]
+            OWN[CachedDeviceOwnershipResolver]
+        end
+
+        subgraph TCP["TCP Layer — in-process"]
+            TC[TcpServer<br/>class library]
+            TCore[Tcp.Core<br/>framing · queue · pipeline]
+            PC[Protocols.Coban]
+            PCA[Protocols.Cantrack]
+            PA[Protocols.Abstractions<br/>ParsedMessage contract]
+        end
+
     end
 
     subgraph App["Application Layer"]
-        AL[Application<br/>services · domain contracts]
+        AL[Application<br/>services · domain contracts<br/>ITelemetryNotifier · IDeviceOwnershipResolver]
         SH[Shared<br/>Options · HTTP DTOs]
     end
 
@@ -51,10 +66,6 @@ graph TB
         OPS[Ops<br/>health · diagnostics]
     end
 
-    subgraph API["HTTP Layer"]
-        AP[ImpiTrack.Api<br/>REST · OpenAPI · Scalar]
-    end
-
     D -->|TCP| TC
     TC --> TCore
     TC --> PC
@@ -63,6 +74,12 @@ graph TB
     PCA --> PA
     TC --> DA
     TC --> SH
+    TC -->|ITelemetryNotifier| SRN
+
+    SRN --> OWN
+    OWN --> DA
+    SRN --> HUB
+    HUB -->|push events| C
 
     AL --> SH
     AL --> PA
@@ -122,6 +139,7 @@ graph LR
     AP --> SH
     AP --> AL
     AP --> AI
+    AP --> TS
 
     TS --> TC
     TS --> PA

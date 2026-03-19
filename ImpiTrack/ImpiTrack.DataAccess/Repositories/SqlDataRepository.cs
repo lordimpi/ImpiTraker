@@ -810,6 +810,20 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<Guid>> GetActiveUserIdsByImeiAsync(string imei, CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetActiveUserIdsByImeiSql(_context.Provider),
+            new { Imei = imei.Trim() },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<Guid> userIds = await connection.QueryAsync<Guid>(command);
+        return userIds.ToArray();
+    }
+
+    /// <inheritdoc />
     public async Task<bool> SetUserPlanAsync(
         Guid userId,
         string planCode,
@@ -2740,6 +2754,28 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     last_received_at_utc = EXCLUDED.last_received_at_utc;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_upsert")
+        };
+    }
+
+    private static string GetActiveUserIdsByImeiSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT ud.user_id
+                FROM user_devices ud
+                WHERE ud.imei = @Imei
+                  AND ud.is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT ud.user_id
+                FROM user_devices ud
+                WHERE ud.imei = @Imei
+                  AND ud.is_active = TRUE;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
     }
 

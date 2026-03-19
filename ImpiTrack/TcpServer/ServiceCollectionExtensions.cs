@@ -1,4 +1,5 @@
-﻿using ImpiTrack.DataAccess.Extensions;
+﻿using ImpiTrack.Application.Abstractions;
+using ImpiTrack.DataAccess.Extensions;
 using ImpiTrack.Shared.Options;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Protocols.Cantrack;
@@ -11,6 +12,7 @@ using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
 using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using TcpServer.EventBus;
 using TcpServer.RawQueue;
@@ -122,6 +124,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProtocolParser, CantrackProtocolParser>();
         services.AddSingleton<IAckStrategy, CobanAckStrategy>();
         services.AddSingleton<IAckStrategy, CantrackAckStrategy>();
+
+        services.TryAddSingleton<ITelemetryNotifier, NullTelemetryNotifier>();
 
         services.AddHostedService<Worker>();
         services.AddHostedService<InboundProcessingService>();

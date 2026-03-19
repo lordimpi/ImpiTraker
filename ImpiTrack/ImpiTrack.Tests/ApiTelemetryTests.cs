@@ -12,6 +12,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using TcpServer;
 
 namespace ImpiTrack.Tests;
 
@@ -382,7 +384,13 @@ public sealed class ApiTelemetryTests
                     ["IdentityBootstrap:UserRole"] = "User",
                     ["Database:Provider"] = "InMemory",
                     ["Database:ConnectionString"] = string.Empty,
-                    ["Database:EnableAutoMigrate"] = "false"
+                    ["Database:EnableAutoMigrate"] = "false",
+                    ["TcpServerConfig:Servers:0:Name"] = "Disabled",
+                    ["TcpServerConfig:Servers:0:Port"] = "0",
+                    ["TcpServerConfig:Servers:0:Protocol"] = "COBAN",
+                    ["TcpServerConfig:Pipeline:ChannelCapacity"] = "10",
+                    ["TcpServerConfig:Pipeline:ConsumerWorkers"] = "1",
+                    ["EventBus:Provider"] = "InMemory"
                 };
 
                 configBuilder.AddInMemoryCollection(data);
@@ -393,6 +401,7 @@ public sealed class ApiTelemetryTests
                 services.AddDataProtection().UseEphemeralDataProtectionProvider();
                 services.RemoveAll<IOpsDataStore>();
                 services.AddSingleton<IOpsDataStore, InMemoryOpsDataStore>();
+                TestHostedServiceHelper.RemoveTcpHostedServices(services);
             });
         });
     }
