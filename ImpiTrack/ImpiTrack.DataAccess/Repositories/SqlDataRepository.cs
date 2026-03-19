@@ -490,7 +490,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
 
         IEnumerable<UserDeviceRow> rows = await connection.QueryAsync<UserDeviceRow>(command);
         return rows
-            .Select(x => new UserDeviceBinding(x.DeviceId, x.Imei, x.BoundAtUtc))
+            .Select(x => new UserDeviceBinding(x.DeviceId, x.Imei, x.BoundAtUtc, x.Alias))
             .ToArray();
     }
 
@@ -869,6 +869,29 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> UpdateDeviceAliasAsync(
+        Guid userId,
+        string imei,
+        string? alias,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        CommandDefinition command = new(
+            GetUpdateDeviceAliasSql(_context.Provider),
+            new
+            {
+                UserId = userId,
+                Imei = imei.Trim(),
+                Alias = alias
+            },
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int affected = await connection.ExecuteAsync(command);
+        return affected > 0;
+    }
+
     private async Task<Guid> EnsureDeviceAsync(
         IDbConnection connection,
         IDbTransaction transaction,
@@ -980,7 +1003,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
             row.ActiveSessionId,
             ToNullableProtocolId(row.Protocol),
             ToNullableMessageType(row.LastMessageType),
-            lastPosition);
+            lastPosition,
+            row.Alias);
     }
 
     private static DevicePositionPointDto ToDevicePositionPoint(TelemetryPositionRow row)
@@ -1623,7 +1647,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 SELECT
                     device_id AS DeviceId,
                     imei AS Imei,
-                    bound_at_utc AS BoundAtUtc
+                    bound_at_utc AS BoundAtUtc,
+                    alias AS Alias
                 FROM user_devices
                 WHERE user_id = @UserId
                   AND is_active = 1
@@ -1634,7 +1659,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 SELECT
                     device_id AS "DeviceId",
                     imei AS "Imei",
-                    bound_at_utc AS "BoundAtUtc"
+                    bound_at_utc AS "BoundAtUtc",
+                    alias AS "Alias"
                 FROM user_devices
                 WHERE user_id = @UserId
                   AND is_active = TRUE
@@ -1798,6 +1824,30 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 UPDATE user_devices
                 SET is_active = FALSE,
                     unbound_at_utc = @NowUtc
+                WHERE user_id = @UserId
+                  AND imei = @Imei
+                  AND is_active = TRUE;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_update")
+        };
+    }
+
+    private static string GetUpdateDeviceAliasSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                UPDATE user_devices
+                SET alias = @Alias
+                WHERE user_id = @UserId
+                  AND imei = @Imei
+                  AND is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                UPDATE user_devices
+                SET alias = @Alias
                 WHERE user_id = @UserId
                   AND imei = @Imei
                   AND is_active = TRUE;
@@ -1994,7 +2044,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     latest_position.SpeedKmh AS LastPositionSpeedKmh,
                     latest_position.HeadingDeg AS LastPositionHeadingDeg,
                     latest_position.PacketId AS LastPositionPacketId,
-                    latest_position.SessionId AS LastPositionSessionId
+                    latest_position.SessionId AS LastPositionSessionId,
+                    ud.alias AS Alias
                 FROM user_devices ud
                 OUTER APPLY
                 (
@@ -2065,7 +2116,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     latest_position."SpeedKmh" AS "LastPositionSpeedKmh",
                     latest_position."HeadingDeg" AS "LastPositionHeadingDeg",
                     latest_position."PacketId" AS "LastPositionPacketId",
-                    latest_position."SessionId" AS "LastPositionSessionId"
+                    latest_position."SessionId" AS "LastPositionSessionId",
+                    ud.alias AS "Alias"
                 FROM user_devices ud
                 LEFT JOIN LATERAL
                 (
@@ -2821,6 +2873,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         public Guid? LastPositionPacketId { get; set; }
 
         public Guid? LastPositionSessionId { get; set; }
+
+        public string? Alias { get; set; }
     }
 
     private sealed class TelemetryPositionRow
@@ -2889,6 +2943,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         public string Imei { get; set; } = string.Empty;
 
         public DateTimeOffset BoundAtUtc { get; set; }
+
+        public string? Alias { get; set; }
     }
 
     private sealed class DeviceOwnerRow

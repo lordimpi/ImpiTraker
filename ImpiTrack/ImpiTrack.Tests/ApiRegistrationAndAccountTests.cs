@@ -409,6 +409,231 @@ public sealed class ApiRegistrationAndAccountTests
     }
 
     [Fact]
+    public async Task SetAlias_ShouldAssignAndReturnAlias()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyAndLoginAsync(
+            client,
+            "alias.set.user",
+            "alias.set.user@imptrack.local");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+        await client.PostAsJsonAsync("/api/me/devices", new { imei = "111000111000111" });
+
+        HttpResponseMessage aliasResponse = await client.PutAsJsonAsync(
+            "/api/me/telemetry/devices/111000111000111/alias",
+            new { alias = "Truck #4" });
+
+        Assert.Equal(HttpStatusCode.OK, aliasResponse.StatusCode);
+        ApiEnvelope<DeviceAliasResponse>? aliasPayload =
+            await aliasResponse.Content.ReadFromJsonAsync<ApiEnvelope<DeviceAliasResponse>>();
+        Assert.NotNull(aliasPayload);
+        Assert.True(aliasPayload!.Success);
+        Assert.NotNull(aliasPayload.Data);
+        Assert.Equal("111000111000111", aliasPayload.Data!.Imei);
+        Assert.Equal("Truck #4", aliasPayload.Data.Alias);
+
+        HttpResponseMessage devicesResponse = await client.GetAsync("/api/me/devices");
+        Assert.Equal(HttpStatusCode.OK, devicesResponse.StatusCode);
+        ApiEnvelope<List<UserDeviceResponse>>? devicesPayload =
+            await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<List<UserDeviceResponse>>>();
+        Assert.NotNull(devicesPayload);
+        UserDeviceResponse device = Assert.Single(devicesPayload!.Data!);
+        Assert.Equal("Truck #4", device.Alias);
+    }
+
+    [Fact]
+    public async Task SetAlias_ShouldClearAlias_WhenNull()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyAndLoginAsync(
+            client,
+            "alias.clear.null",
+            "alias.clear.null@imptrack.local");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+        await client.PostAsJsonAsync("/api/me/devices", new { imei = "222000222000222" });
+
+        await client.PutAsJsonAsync(
+            "/api/me/telemetry/devices/222000222000222/alias",
+            new { alias = "MyGPS" });
+
+        HttpResponseMessage clearResponse = await client.PutAsJsonAsync(
+            "/api/me/telemetry/devices/222000222000222/alias",
+            new { alias = (string?)null });
+
+        Assert.Equal(HttpStatusCode.OK, clearResponse.StatusCode);
+        ApiEnvelope<DeviceAliasResponse>? clearPayload =
+            await clearResponse.Content.ReadFromJsonAsync<ApiEnvelope<DeviceAliasResponse>>();
+        Assert.NotNull(clearPayload);
+        Assert.True(clearPayload!.Success);
+        Assert.Null(clearPayload.Data!.Alias);
+    }
+
+    [Fact]
+    public async Task SetAlias_ShouldClearAlias_WhenEmptyString()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyAndLoginAsync(
+            client,
+            "alias.clear.empty",
+            "alias.clear.empty@imptrack.local");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+        await client.PostAsJsonAsync("/api/me/devices", new { imei = "333000333000333" });
+
+        await client.PutAsJsonAsync(
+            "/api/me/telemetry/devices/333000333000333/alias",
+            new { alias = "MyGPS" });
+
+        HttpResponseMessage clearResponse = await client.PutAsJsonAsync(
+            "/api/me/telemetry/devices/333000333000333/alias",
+            new { alias = "" });
+
+        Assert.Equal(HttpStatusCode.OK, clearResponse.StatusCode);
+        ApiEnvelope<DeviceAliasResponse>? clearPayload =
+            await clearResponse.Content.ReadFromJsonAsync<ApiEnvelope<DeviceAliasResponse>>();
+        Assert.NotNull(clearPayload);
+        Assert.True(clearPayload!.Success);
+        Assert.Null(clearPayload.Data!.Alias);
+    }
+
+    [Fact]
+    public async Task SetAlias_ShouldReturn400_WhenAliasTooLong()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyAndLoginAsync(
+            client,
+            "alias.toolong.user",
+            "alias.toolong.user@imptrack.local");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+        await client.PostAsJsonAsync("/api/me/devices", new { imei = "444000444000444" });
+
+        string longAlias = new('A', 51);
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            "/api/me/telemetry/devices/444000444000444/alias",
+            new { alias = longAlias });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using JsonDocument body = await ReadJsonAsync(response);
+        Assert.Equal("alias_too_long", body.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task SetAlias_ShouldReturn200_WhenAliasExactly50Chars()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyAndLoginAsync(
+            client,
+            "alias.exact50.user",
+            "alias.exact50.user@imptrack.local");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+        await client.PostAsJsonAsync("/api/me/devices", new { imei = "555000555000555" });
+
+        string exactAlias = new('B', 50);
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            "/api/me/telemetry/devices/555000555000555/alias",
+            new { alias = exactAlias });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ApiEnvelope<DeviceAliasResponse>? payload =
+            await response.Content.ReadFromJsonAsync<ApiEnvelope<DeviceAliasResponse>>();
+        Assert.NotNull(payload);
+        Assert.True(payload!.Success);
+        Assert.Equal(exactAlias, payload.Data!.Alias);
+    }
+
+    [Fact]
+    public async Task SetAlias_ShouldReturn404_WhenDeviceNotBound()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyAndLoginAsync(
+            client,
+            "alias.unbound.user",
+            "alias.unbound.user@imptrack.local");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            "/api/me/telemetry/devices/999999999999999/alias",
+            new { alias = "Ghost" });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using JsonDocument body = await ReadJsonAsync(response);
+        Assert.Equal("device_binding_not_found", body.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task AdminSetAlias_ShouldSetAndClearAlias()
+    {
+        await using var factory = CreateFactory(seedAdminOnStart: true);
+        using HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage registerResponse = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            userName = "admin.alias.target",
+            email = "admin.alias.target@imptrack.local",
+            password = "ChangeMe!123"
+        });
+
+        ApiEnvelope<RegisterResultResponse>? registerPayload =
+            await registerResponse.Content.ReadFromJsonAsync<ApiEnvelope<RegisterResultResponse>>();
+        Assert.NotNull(registerPayload);
+        Assert.NotNull(registerPayload!.Data);
+        Assert.NotNull(registerPayload.Data!.Registration);
+
+        HttpResponseMessage verifyResponse = await client.PostAsJsonAsync("/api/auth/verify-email", new
+        {
+            userId = registerPayload.Data.Registration!.UserId,
+            token = registerPayload.Data.Registration.EmailVerificationToken
+        });
+        Assert.Equal(HttpStatusCode.OK, verifyResponse.StatusCode);
+
+        AuthTokenPairResponse adminToken = await LoginAsAdminAsync(client);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.AccessToken);
+
+        await client.PostAsJsonAsync(
+            $"/api/admin/users/{registerPayload.Data.Registration.UserId}/devices",
+            new { imei = "666000666000666" });
+
+        HttpResponseMessage setResponse = await client.PutAsJsonAsync(
+            $"/api/admin/users/{registerPayload.Data.Registration.UserId}/telemetry/devices/666000666000666/alias",
+            new { alias = "Fleet Unit 7" });
+
+        Assert.Equal(HttpStatusCode.OK, setResponse.StatusCode);
+        ApiEnvelope<DeviceAliasResponse>? setPayload =
+            await setResponse.Content.ReadFromJsonAsync<ApiEnvelope<DeviceAliasResponse>>();
+        Assert.NotNull(setPayload);
+        Assert.True(setPayload!.Success);
+        Assert.Equal("Fleet Unit 7", setPayload.Data!.Alias);
+
+        HttpResponseMessage clearResponse = await client.PutAsJsonAsync(
+            $"/api/admin/users/{registerPayload.Data.Registration.UserId}/telemetry/devices/666000666000666/alias",
+            new { alias = (string?)null });
+
+        Assert.Equal(HttpStatusCode.OK, clearResponse.StatusCode);
+        ApiEnvelope<DeviceAliasResponse>? clearPayload =
+            await clearResponse.Content.ReadFromJsonAsync<ApiEnvelope<DeviceAliasResponse>>();
+        Assert.NotNull(clearPayload);
+        Assert.True(clearPayload!.Success);
+        Assert.Null(clearPayload.Data!.Alias);
+    }
+
+    [Fact]
     public async Task VerifyEmailConfirmGet_ShouldConfirmAccount_AndAllowLogin()
     {
         await using var factory = CreateFactory();
@@ -562,6 +787,15 @@ public sealed class ApiRegistrationAndAccountTests
         public string Imei { get; set; } = string.Empty;
 
         public DateTimeOffset BoundAtUtc { get; set; }
+
+        public string? Alias { get; set; }
+    }
+
+    private sealed class DeviceAliasResponse
+    {
+        public string Imei { get; set; } = string.Empty;
+
+        public string? Alias { get; set; }
     }
 
     private sealed class AdminPlanResponse

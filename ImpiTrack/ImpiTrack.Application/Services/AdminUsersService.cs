@@ -122,6 +122,34 @@ public sealed class AdminUsersService : IAdminUsersService
         return removed ? UnbindDeviceStatus.Removed : UnbindDeviceStatus.BindingNotFound;
     }
 
+    /// <inheritdoc />
+    public async Task<UpdateDeviceAliasStatus> UpdateDeviceAliasAsync(
+        Guid userId,
+        string imei,
+        string? alias,
+        CancellationToken cancellationToken)
+    {
+        bool exists = await EnsureProvisionedAsync(userId, cancellationToken);
+        if (!exists)
+        {
+            return UpdateDeviceAliasStatus.UserNotFound;
+        }
+
+        string? normalizedAlias = string.IsNullOrWhiteSpace(alias) ? null : alias.Trim();
+        if (normalizedAlias is not null && normalizedAlias.Length > 50)
+        {
+            return UpdateDeviceAliasStatus.AliasTooLong;
+        }
+
+        bool updated = await _userAccountRepository.UpdateDeviceAliasAsync(
+            userId,
+            imei.Trim(),
+            normalizedAlias,
+            cancellationToken);
+
+        return updated ? UpdateDeviceAliasStatus.Updated : UpdateDeviceAliasStatus.BindingNotFound;
+    }
+
     private async Task<bool> EnsureProvisionedAsync(Guid userId, CancellationToken cancellationToken)
     {
         IdentityUserInfo? user = await _identityUserLookup.FindByIdAsync(userId, cancellationToken);

@@ -3,7 +3,7 @@
 Role: current-state  
 Status: active  
 Owner: backend-maintainers  
-Last Reviewed: 2026-03-18
+Last Reviewed: 2026-03-19
 
 This document is the canonical source of truth for the current backend/runtime state of this repository.
 
@@ -183,7 +183,50 @@ occurred_at_utc  DATETIMEOFFSET  NULL
 
 This column stores the event timestamp derived from the GPS clock. It is used by the trip detection engine to correlate ACC events with position data.
 
-### 6.5 Trip Detection — movement_2d_acc_v2
+### 6.5 Database Schema — user_devices alias (V008)
+
+Migration `V008__user_devices_alias` (SqlServer and PostgreSQL) adds column:
+
+```
+alias  NVARCHAR(50) / VARCHAR(50)  NULL
+```
+
+This column stores a user-assigned friendly name for a device binding. The alias is scoped per user-device binding (not global to the device). It is nullable: when null or empty, the device has no alias.
+
+Affected domain models:
+
+| Model | Project | Change |
+|---|---|---|
+| `UserDeviceBinding` | `Application.Abstractions` | Added `string? Alias = null` |
+| `TelemetryDeviceSummaryDto` | `Application.Abstractions` | Added `string? Alias = null` |
+| `DeviceAliasResult` | `Application.Abstractions` | New record: `(string Imei, string? Alias)` |
+| `UpdateDeviceAliasRequest` | `Shared.Models` | New DTO: `{ string? Alias }` |
+| `UpdateDeviceAliasStatus` | `Application.Abstractions` | New enum: `Updated`, `UserNotFound`, `BindingNotFound`, `AliasTooLong` |
+
+### 6.6 Device Alias API Endpoints
+
+Two endpoints expose alias management:
+
+| Endpoint | Route | Auth |
+|---|---|---|
+| User self-service | `PUT /api/me/telemetry/devices/{imei}/alias` | `[Authorize]` |
+| Admin on behalf of user | `PUT /api/admin/users/{userId}/telemetry/devices/{imei}/alias` | `[Authorize(Policy = "Admin")]` |
+
+Request body: `{ "alias": "string or null" }`
+
+Behavior:
+- Sets alias when `alias` is a non-empty string (trimmed, max 50 chars).
+- Clears alias when `alias` is null, empty, or whitespace-only (stored as `NULL`).
+- Returns `200 OK` with `DeviceAliasResult(Imei, Alias)` on success.
+- Returns `400 Bad Request` (`alias_too_long`) when trimmed alias exceeds 50 characters.
+- Returns `404 Not Found` (`device_binding_not_found`) when no active binding exists for the IMEI.
+- Admin endpoint also returns `404` (`user_not_found`) when the target user does not exist.
+
+The alias is also included in `GET /api/me/telemetry/devices` and `GET /api/admin/users/{userId}/telemetry/devices` responses via `TelemetryDeviceSummaryDto.Alias`.
+
+Service layer: `MeAccountService.UpdateDeviceAliasAsync` and `AdminUsersService.UpdateDeviceAliasAsync` implement identical validation logic (normalize whitespace, enforce max length) and delegate to `IUserAccountRepository.UpdateDeviceAliasAsync`.
+
+### 6.7 Trip Detection — movement_2d_acc_v2
 
 Trip detection runs in `TelemetryQueryService.BuildTrips`. The active algorithm identifier is `movement_2d_acc_v2`.
 
@@ -251,6 +294,14 @@ This current-state document was aligned against the repository structure and exi
 - `ImpiTrack/ImpiTrack.Application/Services/TelemetryQueryService.cs`
 - `ImpiTrack/ImpiTrack.Protocols.Abstractions/ParsedMessage.cs`
 - `ImpiTrack/ImpiTrack.DataAccess/db/sqlserver/V007__device_events_occurred_at.sql`
+- `ImpiTrack/ImpiTrack.DataAccess/db/sqlserver/V008__user_devices_alias.sql`
+- `ImpiTrack/ImpiTrack.DataAccess/db/postgres/V008__user_devices_alias.sql`
+- `ImpiTrack/ImpiTrack.Api/Controllers/MeTelemetryController.cs`
+- `ImpiTrack/ImpiTrack.Api/Controllers/AdminUserTelemetryController.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/ServiceResults.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/UserAccountModels.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/TelemetryModels.cs`
+- `ImpiTrack/ImpiTrack.Shared/Models/UpdateDeviceAliasRequest.cs`
 - `ImpiTrack/Docs/BACKEND_MAINTENANCE_GUIDE.md` (superseded by this file)
 - the active solution/project layout under `ImpiTrack/`
 - all `.csproj` project references (verified 2026-03-18, post `abstractions-placement-refactor`)

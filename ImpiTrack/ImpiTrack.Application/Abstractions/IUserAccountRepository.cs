@@ -92,4 +92,18 @@ public interface IUserAccountRepository
         string planCode,
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Actualiza el alias de un dispositivo vinculado al usuario.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="alias">Nuevo alias o null para borrar.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns><c>true</c> si se actualizo el vinculo.</returns>
+    Task<bool> UpdateDeviceAliasAsync(
+        Guid userId,
+        string imei,
+        string? alias,
+        CancellationToken cancellationToken);
 }

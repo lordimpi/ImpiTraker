@@ -78,6 +78,34 @@ public sealed class MeAccountService : IMeAccountService
         return removed ? UnbindDeviceStatus.Removed : UnbindDeviceStatus.BindingNotFound;
     }
 
+    /// <inheritdoc />
+    public async Task<UpdateDeviceAliasStatus> UpdateDeviceAliasAsync(
+        Guid userId,
+        string imei,
+        string? alias,
+        CancellationToken cancellationToken)
+    {
+        UserAccountSummary? summary = await GetOrProvisionSummaryAsync(userId, cancellationToken);
+        if (summary is null)
+        {
+            return UpdateDeviceAliasStatus.UserNotFound;
+        }
+
+        string? normalizedAlias = string.IsNullOrWhiteSpace(alias) ? null : alias.Trim();
+        if (normalizedAlias is not null && normalizedAlias.Length > 50)
+        {
+            return UpdateDeviceAliasStatus.AliasTooLong;
+        }
+
+        bool updated = await _userAccountRepository.UpdateDeviceAliasAsync(
+            userId,
+            imei.Trim(),
+            normalizedAlias,
+            cancellationToken);
+
+        return updated ? UpdateDeviceAliasStatus.Updated : UpdateDeviceAliasStatus.BindingNotFound;
+    }
+
     private async Task<UserAccountSummary?> GetOrProvisionSummaryAsync(Guid userId, CancellationToken cancellationToken)
     {
         UserAccountSummary? summary = await _userAccountRepository.GetUserSummaryAsync(userId, cancellationToken);

@@ -567,6 +567,35 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
         return Task.FromResult(true);
     }
 
+    /// <inheritdoc />
+    public Task<bool> UpdateDeviceAliasAsync(
+        Guid userId,
+        string imei,
+        string? alias,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_accounts.TryGetValue(userId, out InMemoryUserAccount? account))
+        {
+            return Task.FromResult(false);
+        }
+
+        lock (_sync)
+        {
+            UserDeviceBinding? existing = account.Devices
+                .FirstOrDefault(x => string.Equals(x.Imei, imei, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                return Task.FromResult(false);
+            }
+
+            int index = account.Devices.IndexOf(existing);
+            account.Devices[index] = existing with { Alias = alias };
+            return Task.FromResult(true);
+        }
+    }
+
     private static InMemoryUserAccount CreateAccount(Guid userId, string email, string? fullName, DateTimeOffset nowUtc)
     {
         if (!TryResolvePlan(DefaultPlanCode, out AdminPlanDto? plan) || plan is null)
@@ -717,7 +746,8 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
             activeSession?.SessionId.Value,
             protocol,
             messageType,
-            lastPosition);
+            lastPosition,
+            device.Alias);
     }
 
     private sealed class InMemoryUserAccount

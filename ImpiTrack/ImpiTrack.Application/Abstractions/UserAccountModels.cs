@@ -25,10 +25,12 @@ public sealed record UserAccountSummary(
 /// <param name="DeviceId">Identificador interno del dispositivo.</param>
 /// <param name="Imei">IMEI del dispositivo.</param>
 /// <param name="BoundAtUtc">Fecha UTC de vinculacion.</param>
+/// <param name="Alias">Alias opcional asignado por el usuario.</param>
 public sealed record UserDeviceBinding(
     Guid DeviceId,
     string Imei,
-    DateTimeOffset BoundAtUtc);
+    DateTimeOffset BoundAtUtc,
+    string? Alias = null);
 
 /// <summary>
 /// Parametros de consulta para listado administrativo de usuarios.

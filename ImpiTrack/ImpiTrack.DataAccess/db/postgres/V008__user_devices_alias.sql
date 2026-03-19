@@ -1,0 +1,2 @@
+ALTER TABLE user_devices
+    ADD COLUMN IF NOT EXISTS alias VARCHAR(50) NULL;

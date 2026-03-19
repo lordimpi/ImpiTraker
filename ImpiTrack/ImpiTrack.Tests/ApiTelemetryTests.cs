@@ -63,6 +63,33 @@ public sealed class ApiTelemetryTests
     }
 
     [Fact]
+    public async Task MeTelemetryDevices_ShouldReturnAliasAsNull_ForExistingBinding()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyLoginAndBindAsync(
+            client,
+            "alias.null.user",
+            "alias.null.user@imptrack.local",
+            "359586015829803");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+
+        HttpResponseMessage response = await client.GetAsync("/api/me/telemetry/devices");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ApiEnvelope<List<TelemetryDeviceSummaryResponse>>? payload =
+            await response.Content.ReadFromJsonAsync<ApiEnvelope<List<TelemetryDeviceSummaryResponse>>>();
+        Assert.NotNull(payload);
+        Assert.True(payload!.Success);
+        Assert.NotNull(payload.Data);
+        TelemetryDeviceSummaryResponse device = Assert.Single(payload.Data!);
+        Assert.Equal("359586015829803", device.Imei);
+        Assert.Null(device.Alias);
+    }
+
+    [Fact]
     public async Task MeTelemetryPositions_ShouldRespectWindowAndLimit()
     {
         await using var factory = CreateFactory();
@@ -682,6 +709,8 @@ public sealed class ApiTelemetryTests
         public int? LastMessageType { get; set; }
 
         public LastKnownPositionResponse? LastPosition { get; set; }
+
+        public string? Alias { get; set; }
     }
 
     private sealed class LastKnownPositionResponse

@@ -62,4 +62,14 @@ public interface IAdminUsersService
     /// <param name="cancellationToken">Token de cancelacion.</param>
     /// <returns>Estado de desvinculacion.</returns>
     Task<UnbindDeviceStatus> UnbindDeviceAsync(Guid userId, string imei, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Actualiza el alias de un dispositivo de un usuario especifico.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="alias">Nuevo alias o null para borrar.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Estado de la operacion.</returns>
+    Task<UpdateDeviceAliasStatus> UpdateDeviceAliasAsync(Guid userId, string imei, string? alias, CancellationToken cancellationToken);
 }
