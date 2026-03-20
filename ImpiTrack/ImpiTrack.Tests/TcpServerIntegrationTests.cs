@@ -81,6 +81,7 @@ public sealed class TcpServerIntegrationTests
         builder.Services.AddTcpServerServices(builder.Configuration);
         using IHost host = builder.Build();
         await host.StartAsync();
+        await WaitForPortAsync(port);
 
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port);
@@ -126,6 +127,7 @@ public sealed class TcpServerIntegrationTests
         builder.Services.AddTcpServerServices(builder.Configuration);
         using IHost host = builder.Build();
         await host.StartAsync();
+        await WaitForPortAsync(port);
 
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port);
@@ -246,6 +248,25 @@ public sealed class TcpServerIntegrationTests
         DateTimeOffset nowUtc = DateTimeOffset.UtcNow;
         await accounts.EnsureUserProvisioningAsync(userId, "tcp-tests@imptrack.local", "TCP Tests", nowUtc, CancellationToken.None);
         return await accounts.BindDeviceAsync(userId, imei, nowUtc, CancellationToken.None);
+    }
+
+    private static async Task WaitForPortAsync(int port, int timeoutMs = 5000)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                using var probe = new TcpClient();
+                await probe.ConnectAsync(IPAddress.Loopback, port);
+                return;
+            }
+            catch (SocketException)
+            {
+                await Task.Delay(50);
+            }
+        }
+        throw new TimeoutException($"TCP port {port} did not start listening within {timeoutMs}ms");
     }
 
     private static async Task WaitForAssertionAsync(Func<Task> assertion, int attempts = 20, int delayMs = 100)
