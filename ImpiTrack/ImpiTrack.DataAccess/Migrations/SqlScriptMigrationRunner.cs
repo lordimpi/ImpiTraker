@@ -4,6 +4,7 @@ using Dapper;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.Configuration;
 using ImpiTrack.DataAccess.Connection;
+using Microsoft.Data.SqlClient;
 
 namespace ImpiTrack.DataAccess.Migrations;
 
@@ -34,6 +35,11 @@ public sealed class SqlScriptMigrationRunner : IMigrationRunner
         if (!_context.IsSqlEnabled)
         {
             return;
+        }
+
+        if (_context.Provider == DatabaseProvider.SqlServer)
+        {
+            await EnsureSqlServerDatabaseAsync(cancellationToken);
         }
 
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -74,6 +80,19 @@ public sealed class SqlScriptMigrationRunner : IMigrationRunner
                 throw;
             }
         }
+    }
+
+    private async Task EnsureSqlServerDatabaseAsync(CancellationToken cancellationToken)
+    {
+        var builder = new SqlConnectionStringBuilder(_context.ConnectionString);
+        string databaseName = builder.InitialCatalog;
+        builder.InitialCatalog = "master";
+
+        await using var masterConnection = new SqlConnection(builder.ConnectionString);
+        await masterConnection.OpenAsync(cancellationToken);
+
+        string sql = $"IF DB_ID(N'{databaseName}') IS NULL CREATE DATABASE [{databaseName}];";
+        await masterConnection.ExecuteAsync(sql);
     }
 
     private async Task EnsureMigrationsTableAsync(IDbConnection connection, CancellationToken cancellationToken)

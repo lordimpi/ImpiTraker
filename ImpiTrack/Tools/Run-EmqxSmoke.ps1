@@ -171,7 +171,7 @@ try {
 
     if (-not $NoBuild.IsPresent) {
         Write-Host "Smoke EMQX: build TcpServer ($Configuration)"
-        dotnet build $tcpProject -c $Configuration
+        dotnet build $tcpProject -c $Configuration /p:StandaloneHost=true
         if ($LASTEXITCODE -ne 0) {
             throw "smoke_build_failed project=$tcpProject"
         }
@@ -196,10 +196,10 @@ try {
     Set-EnvValue -Name "EventBus__SimulateFailureOnce" -Value "true"
 
     $runArgs = if ($NoBuild.IsPresent) {
-        @("run", "--no-build", "--no-launch-profile", "--project", $tcpProject)
+        @("run", "--no-build", "--no-launch-profile", "--project", $tcpProject, "/p:StandaloneHost=true")
     }
     else {
-        @("run", "--no-launch-profile", "--project", $tcpProject)
+        @("run", "--no-launch-profile", "--project", $tcpProject, "/p:StandaloneHost=true")
     }
 
     $workerProcess = Start-Process -FilePath "dotnet" `
