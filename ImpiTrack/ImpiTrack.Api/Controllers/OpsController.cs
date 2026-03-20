@@ -100,31 +100,37 @@ public sealed class OpsController : ControllerBase
     }
 
     /// <summary>
-    /// Obtiene top de errores de parseo en una ventana temporal.
+    /// Obtiene errores de parseo agrupados en una ventana temporal, paginados.
     /// </summary>
     /// <param name="from">Inicio UTC de la ventana.</param>
     /// <param name="to">Fin UTC de la ventana.</param>
     /// <param name="groupBy">Criterio de agrupacion: protocol, port o errorCode.</param>
-    /// <param name="limit">Limite de grupos devueltos.</param>
-    /// <returns>Agregados de errores.</returns>
+    /// <param name="page">Numero de pagina (base 1).</param>
+    /// <param name="pageSize">Tamano de pagina (10, 20, 50 o 100).</param>
+    /// <returns>Resultado paginado de agregados de errores.</returns>
     [HttpGet("errors/top")]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<ErrorAggregate>>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<ErrorAggregate>>>> GetTopErrors(
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<ErrorAggregate>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<ErrorAggregate>>), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ApiResponse<PagedResult<ErrorAggregate>>>> GetTopErrors(
         [FromQuery] DateTimeOffset? from,
         [FromQuery] DateTimeOffset? to,
         [FromQuery] string groupBy = "errorCode",
-        [FromQuery] int limit = 20)
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
     {
-        DateTimeOffset toUtc = to ?? DateTimeOffset.UtcNow;
-        DateTimeOffset fromUtc = from ?? toUtc.AddHours(-1);
-        IReadOnlyList<ErrorAggregate> response = await _opsRepository.GetTopErrorsAsync(
-            fromUtc,
-            toUtc,
-            groupBy,
-            limit,
+        if (!AllowedPageSizes.Contains(pageSize))
+        {
+            return this.FailEnvelope<PagedResult<ErrorAggregate>>(
+                StatusCodes.Status400BadRequest,
+                "invalid_page_size",
+                $"El tamano de pagina debe ser uno de: {string.Join(", ", AllowedPageSizes)}.");
+        }
+
+        PagedResult<ErrorAggregate> result = await _opsRepository.GetTopErrorsAsync(
+            new OpsErrorListQuery(page, pageSize, from, to, groupBy),
             HttpContext.RequestAborted);
 
-        return this.OkEnvelope(response);
+        return this.OkEnvelope(result);
     }
 
     /// <summary>

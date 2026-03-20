@@ -13,6 +13,7 @@ namespace ImpiTrack.DataAccess.InMemory;
 public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository, ITelemetryQueryRepository
 {
     private const string DefaultPlanCode = "BASIC";
+    private static readonly HashSet<int> AllowedPageSizes = [10, 20, 50, 100];
     private static readonly IReadOnlyList<AdminPlanDto> Plans =
     [
         new AdminPlanDto(Guid.Parse("10000000-0000-0000-0000-000000000001"), "BASIC", "Basic", 3, true),
@@ -157,15 +158,22 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<ErrorAggregate>> GetTopErrorsAsync(
-        DateTimeOffset fromUtc,
-        DateTimeOffset toUtc,
-        string groupBy,
-        int limit,
-        CancellationToken cancellationToken)
+    public Task<PagedResult<ErrorAggregate>> GetTopErrorsAsync(OpsErrorListQuery query, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_store.GetTopErrors(fromUtc, toUtc, groupBy, limit));
+
+        int page = Math.Max(query.Page, 1);
+        int pageSize = AllowedPageSizes.Contains(query.PageSize) ? query.PageSize : 20;
+
+        DateTimeOffset toUtc = query.To ?? DateTimeOffset.UtcNow;
+        DateTimeOffset fromUtc = query.From ?? toUtc.AddHours(-1);
+
+        IReadOnlyList<ErrorAggregate> all = _store.GetTopErrors(fromUtc, toUtc, query.GroupBy, int.MaxValue);
+        int totalItems = all.Count;
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        ErrorAggregate[] items = all.Skip((page - 1) * pageSize).Take(pageSize).ToArray();
+
+        return Task.FromResult(new PagedResult<ErrorAggregate>(items, page, pageSize, totalItems, totalPages));
     }
 
     /// <inheritdoc />

@@ -28,20 +28,12 @@ public interface IOpsRepository
     Task<RawPacketRecord?> GetRawPacketByIdAsync(PacketId packetId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Obtiene agregados de errores de parseo en una ventana temporal.
+    /// Obtiene agregados de errores de parseo en una ventana temporal, paginados.
     /// </summary>
-    /// <param name="fromUtc">Inicio UTC del rango.</param>
-    /// <param name="toUtc">Fin UTC del rango.</param>
-    /// <param name="groupBy">Criterio de agrupacion: protocol, port o errorCode.</param>
-    /// <param name="limit">Cantidad maxima de grupos.</param>
+    /// <param name="query">Parametros de paginacion, rango temporal y agrupacion.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
-    /// <returns>Agregados ordenados por ocurrencias.</returns>
-    Task<IReadOnlyList<ErrorAggregate>> GetTopErrorsAsync(
-        DateTimeOffset fromUtc,
-        DateTimeOffset toUtc,
-        string groupBy,
-        int limit,
-        CancellationToken cancellationToken);
+    /// <returns>Resultado paginado de agregados ordenados por ocurrencias.</returns>
+    Task<PagedResult<ErrorAggregate>> GetTopErrorsAsync(OpsErrorListQuery query, CancellationToken cancellationToken);
 
     /// <summary>
     /// Obtiene sesiones activas de forma paginada, filtradas opcionalmente por puerto.

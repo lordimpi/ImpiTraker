@@ -21,6 +21,7 @@ namespace ImpiTrack.DataAccess.Repositories;
 public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IUserAccountRepository, ITelemetryQueryRepository
 {
     private const string DefaultPlanCode = "BASIC";
+    private static readonly HashSet<int> AllowedPageSizes = [10, 20, 50, 100];
     private readonly IDbConnectionFactory _connectionFactory;
     private readonly DatabaseRuntimeContext _context;
 
@@ -359,27 +360,35 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<ErrorAggregate>> GetTopErrorsAsync(
-        DateTimeOffset fromUtc,
-        DateTimeOffset toUtc,
-        string groupBy,
-        int limit,
-        CancellationToken cancellationToken)
+    public async Task<PagedResult<ErrorAggregate>> GetTopErrorsAsync(OpsErrorListQuery query, CancellationToken cancellationToken)
     {
-        int normalizedLimit = Math.Clamp(limit, 1, 200);
-        string grouping = NormalizeGrouping(groupBy);
+        int page = Math.Max(query.Page, 1);
+        int pageSize = AllowedPageSizes.Contains(query.PageSize) ? query.PageSize : 20;
+        int offset = (page - 1) * pageSize;
+
+        DateTimeOffset toUtc = query.To ?? DateTimeOffset.UtcNow;
+        DateTimeOffset fromUtc = query.From ?? toUtc.AddHours(-1);
+
+        string grouping = NormalizeGrouping(query.GroupBy);
 
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         CommandDefinition command = new(
             GetTopErrorsSql(grouping, _context.Provider),
-            new { FromUtc = fromUtc, ToUtc = toUtc, Limit = normalizedLimit },
+            new { FromUtc = fromUtc, ToUtc = toUtc, Offset = offset, PageSize = pageSize },
             commandTimeout: _context.CommandTimeoutSeconds,
             cancellationToken: cancellationToken);
 
         IEnumerable<ErrorAggregateRow> rows = await connection.QueryAsync<ErrorAggregateRow>(command);
-        return rows
+        ErrorAggregateRow[] materialized = rows.ToArray();
+
+        int totalItems = materialized.Length > 0 ? materialized[0].TotalCount : 0;
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+
+        ErrorAggregate[] items = materialized
             .Select(x => new ErrorAggregate(x.GroupKey, x.Count, x.LastPacketId.HasValue ? new PacketId(x.LastPacketId.Value) : null))
             .ToArray();
+
+        return new PagedResult<ErrorAggregate>(items, page, pageSize, totalItems, totalPages);
     }
 
     /// <inheritdoc />
@@ -1474,30 +1483,45 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         {
             DatabaseProvider.SqlServer =>
                 $"""
-                SELECT TOP (@Limit)
-                    {groupExpression} AS GroupKey,
-                    COUNT_BIG(*) AS Count,
-                    MAX(packet_id) AS LastPacketId
-                FROM raw_packets
-                WHERE parse_status <> 1
-                  AND received_at_utc >= @FromUtc
-                  AND received_at_utc <= @ToUtc
-                GROUP BY {groupExpression}
-                ORDER BY Count DESC, GroupKey ASC;
+                WITH aggregated AS (
+                    SELECT
+                        {groupExpression} AS group_key,
+                        COUNT_BIG(*) AS count,
+                        MAX(packet_id) AS last_packet_id
+                    FROM raw_packets
+                    WHERE received_at_utc >= @FromUtc AND received_at_utc < @ToUtc
+                      AND parse_status <> 1
+                    GROUP BY {groupExpression}
+                )
+                SELECT
+                    group_key AS GroupKey,
+                    count AS Count,
+                    last_packet_id AS LastPacketId,
+                    COUNT(*) OVER() AS TotalCount
+                FROM aggregated
+                ORDER BY count DESC, group_key ASC
+                OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
                 """,
             DatabaseProvider.Postgres =>
                 $"""
+                WITH aggregated AS (
+                    SELECT
+                        {groupExpression} AS group_key,
+                        COUNT(*)::BIGINT AS count,
+                        MAX(packet_id) AS last_packet_id
+                    FROM raw_packets
+                    WHERE received_at_utc >= @FromUtc AND received_at_utc < @ToUtc
+                      AND parse_status <> 1
+                    GROUP BY {groupExpression}
+                )
                 SELECT
-                    {groupExpression} AS "GroupKey",
-                    COUNT(*)::BIGINT AS "Count",
-                    MAX(packet_id) AS "LastPacketId"
-                FROM raw_packets
-                WHERE parse_status <> 1
-                  AND received_at_utc >= @FromUtc
-                  AND received_at_utc <= @ToUtc
-                GROUP BY {groupExpression}
-                ORDER BY "Count" DESC, "GroupKey" ASC
-                LIMIT @Limit;
+                    group_key AS "GroupKey",
+                    count AS "Count",
+                    last_packet_id AS "LastPacketId",
+                    COUNT(*) OVER() AS "TotalCount"
+                FROM aggregated
+                ORDER BY count DESC, group_key ASC
+                LIMIT @PageSize OFFSET @Offset;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
@@ -3132,6 +3156,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         public long Count { get; set; }
 
         public Guid? LastPacketId { get; set; }
+
+        public int TotalCount { get; set; }
     }
 
     private sealed class SessionRow
