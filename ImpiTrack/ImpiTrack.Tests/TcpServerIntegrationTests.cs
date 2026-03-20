@@ -38,6 +38,7 @@ public sealed class TcpServerIntegrationTests
         builder.Services.AddTcpServerServices(builder.Configuration);
         using IHost host = builder.Build();
         await host.StartAsync();
+        await WaitForPortAsync(port);
 
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port);
@@ -180,6 +181,7 @@ public sealed class TcpServerIntegrationTests
         }
 
         await host.StartAsync();
+        await WaitForPortAsync(port);
 
         using var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port);
