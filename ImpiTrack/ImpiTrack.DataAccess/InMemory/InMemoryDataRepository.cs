@@ -36,11 +36,11 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     /// </summary>
     /// <param name="store">Almacen operativo en memoria.</param>
     /// <param name="configuration">Configuracion de la aplicacion.</param>
-    public InMemoryDataRepository(IOpsDataStore store, IConfiguration configuration)
+    public InMemoryDataRepository(IOpsDataStore store, IConfiguration? configuration = null)
     {
         _store = store;
 
-        string[] seedImeis = configuration.GetSection("Database:InMemory:SeedImeis").Get<string[]>() ?? [];
+        string[] seedImeis = configuration?.GetSection("Database:InMemory:SeedImeis").Get<string[]>() ?? [];
         foreach (string imei in seedImeis)
         {
             if (!string.IsNullOrWhiteSpace(imei))
