@@ -30,7 +30,7 @@ public sealed class MeAccountService : IMeAccountService
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<UserDeviceBinding>?> GetDevicesAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task<PagedResult<UserDeviceBinding>?> GetDevicesPagedAsync(Guid userId, MeDeviceListQuery query, CancellationToken cancellationToken)
     {
         UserAccountSummary? summary = await GetOrProvisionSummaryAsync(userId, cancellationToken);
         if (summary is null)
@@ -38,7 +38,7 @@ public sealed class MeAccountService : IMeAccountService
             return null;
         }
 
-        return await _userAccountRepository.GetUserDevicesAsync(userId, cancellationToken);
+        return await _userAccountRepository.GetUserDevicesPagedMeAsync(userId, query, cancellationToken);
     }
 
     /// <inheritdoc />

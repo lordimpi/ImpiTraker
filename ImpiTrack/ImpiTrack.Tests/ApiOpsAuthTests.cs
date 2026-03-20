@@ -110,7 +110,7 @@ public sealed class ApiOpsAuthTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using JsonDocument json = await ReadJsonAsync(response);
-        JsonElement item = json.RootElement.GetProperty("data")[0];
+        JsonElement item = json.RootElement.GetProperty("data").GetProperty("items")[0];
         Assert.Equal((int)MessageType.Tracking, item.GetProperty("messageType").GetInt32());
         Assert.Equal((int)RawParseStatus.Failed, item.GetProperty("parseStatus").GetInt32());
         Assert.Equal("invalid_latitude", item.GetProperty("parseError").GetString());

@@ -1,4 +1,5 @@
 using ImpiTrack.Api.Http;
+using ImpiTrack.Application.Abstractions;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
@@ -16,6 +17,8 @@ namespace ImpiTrack.Api.Controllers;
 [Authorize(Policy = "Admin")]
 public sealed class OpsController : ControllerBase
 {
+    private static readonly HashSet<int> AllowedPageSizes = [10, 20, 50, 100];
+
     private readonly IOpsRepository _opsRepository;
 
     /// <summary>
@@ -28,23 +31,47 @@ public sealed class OpsController : ControllerBase
     }
 
     /// <summary>
-    /// Obtiene paquetes raw recientes por IMEI opcional.
+    /// Obtiene paquetes raw recientes por IMEI opcional, paginados.
     /// </summary>
     /// <param name="imei">IMEI opcional para filtrar.</param>
-    /// <param name="limit">Limite maximo de resultados.</param>
-    /// <returns>Lista de paquetes raw recientes.</returns>
+    /// <param name="page">Numero de pagina (base 1).</param>
+    /// <param name="pageSize">Tamano de pagina (10, 20, 50 o 100).</param>
+    /// <param name="limit">Alias obsoleto de pageSize para compatibilidad hacia atras.</param>
+    /// <returns>Resultado paginado de paquetes raw recientes.</returns>
     [HttpGet("raw/latest")]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<RawPacketRecord>>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<RawPacketRecord>>>> GetLatestRaw(
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<RawPacketRecord>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<RawPacketRecord>>), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ApiResponse<PagedResult<RawPacketRecord>>>> GetLatestRaw(
         [FromQuery] string? imei,
-        [FromQuery] int limit = 50)
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 0,
+        [FromQuery] int limit = 0)
     {
-        IReadOnlyList<RawPacketRecord> records = await _opsRepository.GetLatestRawPacketsAsync(
-            imei,
-            limit,
+        // limit alias: backward-compat — treat as pageSize on page 1
+        if (pageSize == 0 && limit > 0)
+        {
+            pageSize = limit;
+            page = 1;
+        }
+
+        if (pageSize == 0)
+        {
+            pageSize = 20;
+        }
+
+        if (!AllowedPageSizes.Contains(pageSize))
+        {
+            return this.FailEnvelope<PagedResult<RawPacketRecord>>(
+                StatusCodes.Status400BadRequest,
+                "invalid_page_size",
+                $"El tamano de pagina debe ser uno de: {string.Join(", ", AllowedPageSizes)}.");
+        }
+
+        PagedResult<RawPacketRecord> result = await _opsRepository.GetLatestRawPacketsAsync(
+            new OpsRawListQuery(page, pageSize, imei),
             HttpContext.RequestAborted);
 
-        return this.OkEnvelope(records);
+        return this.OkEnvelope(result);
     }
 
     /// <summary>
@@ -101,19 +128,33 @@ public sealed class OpsController : ControllerBase
     }
 
     /// <summary>
-    /// Obtiene sesiones activas opcionalmente filtradas por puerto.
+    /// Obtiene sesiones activas paginadas, opcionalmente filtradas por puerto.
     /// </summary>
     /// <param name="port">Puerto opcional de filtrado.</param>
-    /// <returns>Sesiones activas.</returns>
+    /// <param name="page">Numero de pagina (base 1).</param>
+    /// <param name="pageSize">Tamano de pagina (10, 20, 50 o 100).</param>
+    /// <returns>Resultado paginado de sesiones activas.</returns>
     [HttpGet("sessions/active")]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<SessionRecord>>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<SessionRecord>>>> GetActiveSessions([FromQuery] int? port)
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<SessionRecord>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<SessionRecord>>), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ApiResponse<PagedResult<SessionRecord>>>> GetActiveSessions(
+        [FromQuery] int? port,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
     {
-        IReadOnlyList<SessionRecord> sessions = await _opsRepository.GetActiveSessionsAsync(
-            port,
+        if (!AllowedPageSizes.Contains(pageSize))
+        {
+            return this.FailEnvelope<PagedResult<SessionRecord>>(
+                StatusCodes.Status400BadRequest,
+                "invalid_page_size",
+                $"El tamano de pagina debe ser uno de: {string.Join(", ", AllowedPageSizes)}.");
+        }
+
+        PagedResult<SessionRecord> result = await _opsRepository.GetActiveSessionsAsync(
+            new OpsSessionListQuery(page, pageSize, port),
             HttpContext.RequestAborted);
 
-        return this.OkEnvelope(sessions);
+        return this.OkEnvelope(result);
     }
 
     /// <summary>

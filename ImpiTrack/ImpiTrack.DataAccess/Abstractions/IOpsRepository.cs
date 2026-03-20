@@ -1,3 +1,4 @@
+using ImpiTrack.Application.Abstractions;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
 
@@ -9,15 +10,13 @@ namespace ImpiTrack.DataAccess.Abstractions;
 public interface IOpsRepository
 {
     /// <summary>
-    /// Obtiene paquetes raw recientes filtrando por IMEI opcional.
+    /// Obtiene paquetes raw recientes de forma paginada, filtrando por IMEI opcional.
     /// </summary>
-    /// <param name="imei">IMEI opcional para filtrar.</param>
-    /// <param name="limit">Cantidad maxima de resultados.</param>
+    /// <param name="query">Parametros de paginacion y filtrado.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
-    /// <returns>Lista de paquetes raw recientes.</returns>
-    Task<IReadOnlyList<RawPacketRecord>> GetLatestRawPacketsAsync(
-        string? imei,
-        int limit,
+    /// <returns>Resultado paginado de paquetes raw recientes.</returns>
+    Task<PagedResult<RawPacketRecord>> GetLatestRawPacketsAsync(
+        OpsRawListQuery query,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -45,12 +44,12 @@ public interface IOpsRepository
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Obtiene sesiones activas filtradas opcionalmente por puerto.
+    /// Obtiene sesiones activas de forma paginada, filtradas opcionalmente por puerto.
     /// </summary>
-    /// <param name="port">Puerto opcional para filtrar.</param>
+    /// <param name="query">Parametros de paginacion y filtrado.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
-    /// <returns>Lista de sesiones activas.</returns>
-    Task<IReadOnlyList<SessionRecord>> GetActiveSessionsAsync(int? port, CancellationToken cancellationToken);
+    /// <returns>Resultado paginado de sesiones activas.</returns>
+    Task<PagedResult<SessionRecord>> GetActiveSessionsAsync(OpsSessionListQuery query, CancellationToken cancellationToken);
 
     /// <summary>
     /// Obtiene snapshots agregados de ingesta por puerto.

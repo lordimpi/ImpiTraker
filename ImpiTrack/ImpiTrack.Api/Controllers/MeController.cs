@@ -58,34 +58,54 @@ public sealed class MeController : ControllerBase
         return this.OkEnvelope(summary);
     }
 
+    private static readonly HashSet<int> AllowedPageSizes = [10, 20, 50, 100];
+
     /// <summary>
-    /// Obtiene los GPS vinculados al usuario autenticado.
+    /// Obtiene los GPS vinculados al usuario autenticado, paginados.
     /// </summary>
+    /// <param name="page">Numero de pagina (base 1).</param>
+    /// <param name="pageSize">Tamano de pagina (10, 20, 50 o 100).</param>
     /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
-    /// <returns>Listado de dispositivos vinculados.</returns>
+    /// <returns>Resultado paginado de dispositivos vinculados.</returns>
     [HttpGet("devices")]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserDeviceBinding>>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserDeviceBinding>>), StatusCodes.Status401Unauthorized)]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<UserDeviceBinding>>>> GetDevices(CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<UserDeviceBinding>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<UserDeviceBinding>>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<UserDeviceBinding>>), StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<ApiResponse<PagedResult<UserDeviceBinding>>>> GetDevices(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default)
     {
         if (!TryGetCurrentUserId(out Guid userId))
         {
-            return this.FailEnvelope<IReadOnlyList<UserDeviceBinding>>(
+            return this.FailEnvelope<PagedResult<UserDeviceBinding>>(
                 StatusCodes.Status401Unauthorized,
                 "unauthorized",
                 "No fue posible autenticar la solicitud.");
         }
 
-        IReadOnlyList<UserDeviceBinding>? devices = await _meAccountService.GetDevicesAsync(userId, cancellationToken);
-        if (devices is null)
+        if (!AllowedPageSizes.Contains(pageSize))
         {
-            return this.FailEnvelope<IReadOnlyList<UserDeviceBinding>>(
+            return this.FailEnvelope<PagedResult<UserDeviceBinding>>(
+                StatusCodes.Status400BadRequest,
+                "invalid_page_size",
+                $"El tamano de pagina debe ser uno de: {string.Join(", ", AllowedPageSizes)}.");
+        }
+
+        PagedResult<UserDeviceBinding>? result = await _meAccountService.GetDevicesPagedAsync(
+            userId,
+            new MeDeviceListQuery(page, pageSize),
+            cancellationToken);
+
+        if (result is null)
+        {
+            return this.FailEnvelope<PagedResult<UserDeviceBinding>>(
                 StatusCodes.Status401Unauthorized,
                 "unauthorized",
                 "No fue posible autenticar la solicitud.");
         }
 
-        return this.OkEnvelope(devices);
+        return this.OkEnvelope(result);
     }
 
     /// <summary>

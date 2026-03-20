@@ -193,8 +193,8 @@ public sealed class TcpServerIntegrationTests
             IOpsRepository opsRepository = scope.ServiceProvider.GetRequiredService<IOpsRepository>();
             ITelemetryQueryRepository telemetryRepository = scope.ServiceProvider.GetRequiredService<ITelemetryQueryRepository>();
 
-            IReadOnlyList<RawPacketRecord> rawPackets = await opsRepository.GetLatestRawPacketsAsync(imei, 10, CancellationToken.None);
-            RawPacketRecord raw = Assert.Single(rawPackets);
+            PagedResult<RawPacketRecord> rawPage = await opsRepository.GetLatestRawPacketsAsync(new OpsRawListQuery(1, 10, imei), CancellationToken.None);
+            RawPacketRecord raw = Assert.Single(rawPage.Items);
             Assert.Equal(MessageType.Tracking, raw.MessageType);
             Assert.Equal(RawParseStatus.Failed, raw.ParseStatus);
             Assert.Equal("invalid_latitude", raw.ParseError);
