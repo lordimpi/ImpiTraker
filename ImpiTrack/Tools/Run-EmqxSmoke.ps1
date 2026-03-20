@@ -202,9 +202,10 @@ try {
         @("run", "--no-launch-profile", "--project", $tcpProject, "/p:StandaloneHost=true")
     }
 
+    $tcpProjectDir = Split-Path -Parent $tcpProject
     $workerProcess = Start-Process -FilePath "dotnet" `
         -ArgumentList $runArgs `
-        -WorkingDirectory $repoRoot `
+        -WorkingDirectory $tcpProjectDir `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath `
         -PassThru
