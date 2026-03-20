@@ -153,6 +153,7 @@ $envBackup = @{
     ASPNETCORE_ENVIRONMENT = $env:ASPNETCORE_ENVIRONMENT
     Database__Provider = $env:Database__Provider
     Database__EnableAutoMigrate = $env:Database__EnableAutoMigrate
+    Database__InMemory__SeedImeis__0 = $env:Database__InMemory__SeedImeis__0
     EventBus__Provider = $env:EventBus__Provider
     EventBus__Host = $env:EventBus__Host
     EventBus__Port = $env:EventBus__Port
@@ -185,6 +186,7 @@ try {
     Set-EnvValue -Name "ASPNETCORE_ENVIRONMENT" -Value "Development"
     Set-EnvValue -Name "Database__Provider" -Value "InMemory"
     Set-EnvValue -Name "Database__EnableAutoMigrate" -Value "false"
+    Set-EnvValue -Name "Database__InMemory__SeedImeis__0" -Value "359586015829802"
     Set-EnvValue -Name "EventBus__Provider" -Value "Emqx"
     Set-EnvValue -Name "EventBus__Host" -Value "127.0.0.1"
     Set-EnvValue -Name "EventBus__Port" -Value $EmqxPort.ToString()

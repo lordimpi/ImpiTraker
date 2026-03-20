@@ -3,6 +3,7 @@ using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.Ops;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Queue;
+using Microsoft.Extensions.Configuration;
 using System.Collections.Concurrent;
 
 namespace ImpiTrack.DataAccess.InMemory;
@@ -30,11 +31,23 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
 
     /// <summary>
     /// Crea un repositorio en memoria con almacenamiento operativo compartido.
+    /// IMEIs listados en <c>Database:InMemory:SeedImeis</c> se pre-registran como propietarios
+    /// para que los smoke tests y depuracion local puedan recibir eventos sin un usuario real.
     /// </summary>
     /// <param name="store">Almacen operativo en memoria.</param>
-    public InMemoryDataRepository(IOpsDataStore store)
+    /// <param name="configuration">Configuracion de la aplicacion.</param>
+    public InMemoryDataRepository(IOpsDataStore store, IConfiguration configuration)
     {
         _store = store;
+
+        string[] seedImeis = configuration.GetSection("Database:InMemory:SeedImeis").Get<string[]>() ?? [];
+        foreach (string imei in seedImeis)
+        {
+            if (!string.IsNullOrWhiteSpace(imei))
+            {
+                _activeImeiOwners[imei.Trim()] = Guid.NewGuid();
+            }
+        }
     }
 
     /// <inheritdoc />
