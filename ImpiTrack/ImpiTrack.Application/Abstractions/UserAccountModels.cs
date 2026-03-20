@@ -25,10 +25,12 @@ public sealed record UserAccountSummary(
 /// <param name="DeviceId">Identificador interno del dispositivo.</param>
 /// <param name="Imei">IMEI del dispositivo.</param>
 /// <param name="BoundAtUtc">Fecha UTC de vinculacion.</param>
+/// <param name="Alias">Alias opcional asignado por el usuario.</param>
 public sealed record UserDeviceBinding(
     Guid DeviceId,
     string Imei,
-    DateTimeOffset BoundAtUtc);
+    DateTimeOffset BoundAtUtc,
+    string? Alias = null);
 
 /// <summary>
 /// Parametros de consulta para listado administrativo de usuarios.
@@ -46,6 +48,30 @@ public sealed record AdminUserListQuery(
     string? PlanCode,
     string SortBy,
     string SortDirection);
+
+/// <summary>
+/// Parametros de consulta para listado paginado de dispositivos de un usuario.
+/// </summary>
+/// <param name="Page">Pagina solicitada (base 1).</param>
+/// <param name="PageSize">Tamano de pagina.</param>
+/// <param name="SortBy">Campo de ordenamiento.</param>
+/// <param name="SortDirection">Direccion del ordenamiento.</param>
+/// <param name="Search">Texto parcial para buscar por IMEI o alias.</param>
+public sealed record AdminDeviceListQuery(
+    int Page,
+    int PageSize,
+    string SortBy,
+    string SortDirection,
+    string? Search = null);
+
+/// <summary>
+/// Parametros de consulta para listado paginado de dispositivos del usuario autenticado.
+/// Ordenamiento fijo: bound_at_utc DESC, imei ASC.
+/// </summary>
+/// <param name="Page">Pagina solicitada (base 1).</param>
+/// <param name="PageSize">Tamano de pagina (valores permitidos: 10, 20, 50, 100).</param>
+/// <param name="Search">Texto parcial para buscar por IMEI o alias.</param>
+public sealed record MeDeviceListQuery(int Page, int PageSize, string? Search = null);
 
 /// <summary>
 /// Vista administrativa de usuario para listado.

@@ -31,6 +31,13 @@ public sealed class AdminUsersController : ControllerBase
         "desc"
     };
 
+    private static readonly HashSet<string> AllowedDeviceSortBy = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "imei",
+        "boundAtUtc",
+        "alias"
+    };
+
     private readonly IAdminUsersService _adminUsersService;
 
     /// <summary>
@@ -112,22 +119,51 @@ public sealed class AdminUsersController : ControllerBase
     }
 
     /// <summary>
-    /// Obtiene los dispositivos vinculados a un usuario especifico.
+    /// Obtiene los dispositivos vinculados a un usuario especifico en formato paginado.
     /// </summary>
     /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="page">Pagina solicitada (base 1).</param>
+    /// <param name="pageSize">Tamano de pagina.</param>
+    /// <param name="search">Texto parcial para filtrar por IMEI o alias.</param>
+    /// <param name="sortBy">Campo de ordenamiento permitido.</param>
+    /// <param name="sortDirection">Direccion de ordenamiento: asc o desc.</param>
     /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
-    /// <returns>Lista de dispositivos activos del usuario.</returns>
+    /// <returns>Listado paginado de dispositivos activos del usuario.</returns>
     [HttpGet("{userId:guid}/devices")]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserDeviceBinding>>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<UserDeviceBinding>>), StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<UserDeviceBinding>>>> GetUserDevices(
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<UserDeviceBinding>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<UserDeviceBinding>>), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<UserDeviceBinding>>), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ApiResponse<PagedResult<UserDeviceBinding>>>> GetUserDevices(
         [FromRoute] Guid userId,
-        CancellationToken cancellationToken)
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? search = null,
+        [FromQuery] string sortBy = "boundAtUtc",
+        [FromQuery] string sortDirection = "desc",
+        CancellationToken cancellationToken = default)
     {
-        IReadOnlyList<UserDeviceBinding>? devices = await _adminUsersService.GetUserDevicesAsync(userId, cancellationToken);
+        if (!AllowedDeviceSortBy.Contains(sortBy))
+        {
+            return this.FailEnvelope<PagedResult<UserDeviceBinding>>(
+                StatusCodes.Status400BadRequest,
+                "invalid_sort_by",
+                "El campo de ordenamiento solicitado no es valido.");
+        }
+
+        if (!AllowedSortDirection.Contains(sortDirection))
+        {
+            return this.FailEnvelope<PagedResult<UserDeviceBinding>>(
+                StatusCodes.Status400BadRequest,
+                "invalid_sort_direction",
+                "La direccion de ordenamiento solicitada no es valida.");
+        }
+
+        var query = new AdminDeviceListQuery(page, pageSize, sortBy, sortDirection, search);
+        PagedResult<UserDeviceBinding>? devices = await _adminUsersService.GetUserDevicesAsync(userId, query, cancellationToken);
+
         if (devices is null)
         {
-            return this.FailEnvelope<IReadOnlyList<UserDeviceBinding>>(
+            return this.FailEnvelope<PagedResult<UserDeviceBinding>>(
                 StatusCodes.Status404NotFound,
                 "user_not_found",
                 "No existe la cuenta solicitada.");

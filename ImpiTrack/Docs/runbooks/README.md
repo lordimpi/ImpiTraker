@@ -17,6 +17,7 @@ Required metadata for runbooks:
 
 Current active runbooks:
 
+- [`../GPS_SCALE_TEST_PLAN.md`](../GPS_SCALE_TEST_PLAN.md) - staged load and scale validation plan for 5,000 to 10,000 GPS devices on the unified host
 - [`../TCP_API_E2E_GUIDE.md`](../TCP_API_E2E_GUIDE.md) - end-to-end backend validation flow
 - [`../MANUAL_E2E_EXECUTION_PLAN.md`](../MANUAL_E2E_EXECUTION_PLAN.md) - step-by-step manual E2E procedure
 - [`SMTP_GMAIL_SETUP.md`](SMTP_GMAIL_SETUP.md) - Gmail SMTP setup for real email delivery in development or controlled environments

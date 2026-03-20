@@ -3,10 +3,6 @@
     "Name": "ImpiTrack",
     "Projects": [
       {
-        "Path": "TcpServer\\TcpServer.csproj",
-        "Action": "Start"
-      },
-      {
         "Path": "ImpiTrack.Api\\ImpiTrack.Api.csproj",
         "Action": "Start"
       }

@@ -1,4 +1,7 @@
 using ImpiTrack.Api.Http;
+using ImpiTrack.Api.Hubs;
+using ImpiTrack.Api.Services;
+using ImpiTrack.Application.Abstractions;
 using ImpiTrack.Application.Extensions;
 using ImpiTrack.Auth.Infrastructure.Configuration;
 using ImpiTrack.Auth.Infrastructure.Extensions;
@@ -21,6 +24,7 @@ using OpenTelemetry.Metrics;
 using Scalar.AspNetCore;
 using Serilog;
 using System.Text;
+using TcpServer;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -68,13 +72,17 @@ if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Te
 
 builder.Services.AddHttpContextAccessor();
 
+string[] corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? ["http://localhost:4200", "http://localhost:3000"];
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins(corsOrigins)
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              .AllowCredentials();
     });
 });
 
@@ -86,6 +94,11 @@ builder.Services.BindOptions<EmailOptions>(builder.Configuration, EmailOptions.S
 builder.Services.BindOptions<EmailDispatchOptions>(builder.Configuration, EmailDispatchOptions.SectionName);
 builder.Services.AddImpiTrackDataAccess(builder.Configuration, registerMigrationHostedService: false);
 builder.Services.AddImpiTrackApplication();
+builder.Services.AddTcpServerServices(builder.Configuration);
+builder.Services.AddSignalR();
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<IDeviceOwnershipResolver, CachedDeviceOwnershipResolver>();
+builder.Services.AddSingleton<ITelemetryNotifier, SignalRTelemetryNotifier>();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.Configure<ApiBehaviorOptions>(options =>
@@ -305,6 +318,20 @@ builder.Services
 
         options.Events = new JwtBearerEvents
         {
+            OnMessageReceived = context =>
+            {
+                string? path = context.HttpContext.Request.Path.Value;
+                if (!string.IsNullOrEmpty(path) && path.StartsWith("/hubs/", StringComparison.OrdinalIgnoreCase))
+                {
+                    string? accessToken = context.Request.Query["access_token"];
+                    if (!string.IsNullOrWhiteSpace(accessToken))
+                    {
+                        context.Token = accessToken;
+                    }
+                }
+
+                return Task.CompletedTask;
+            },
             OnChallenge = async context =>
             {
                 context.HandleResponse();
@@ -443,10 +470,11 @@ app.UseStatusCodePages(async statusCodeContext =>
 });
 
 app.UseHttpsRedirection();
+app.UseCors("AllowAll");
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseCors("AllowAll");
 app.MapControllers();
+app.MapHub<TelemetryHub>("/hubs/telemetry");
 
 app.MapGet("/", () => Results.Redirect("/scalar/v1"))
    .ExcludeFromDescription();

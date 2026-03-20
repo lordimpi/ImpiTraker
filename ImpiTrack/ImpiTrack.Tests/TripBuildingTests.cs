@@ -262,6 +262,9 @@ public sealed class TripBuildingTests
         public Task<IReadOnlyList<DeviceEventDto>> GetEventsAsync(
             Guid userId, string imei, DateTimeOffset fromUtc, DateTimeOffset toUtc, int limit, CancellationToken cancellationToken)
             => Task.FromResult<IReadOnlyList<DeviceEventDto>>([]);
+
+        public Task<IReadOnlyList<Guid>> GetActiveUserIdsByImeiAsync(string imei, CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<Guid>>([]);
     }
 
     private sealed class StubIdentityUserLookup : IIdentityUserLookup

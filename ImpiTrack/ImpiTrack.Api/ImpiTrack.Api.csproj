@@ -39,6 +39,7 @@
     <ProjectReference Include="..\ImpiTrack.Shared\ImpiTrack.Shared.csproj" />
     <ProjectReference Include="..\ImpiTrack.Application\ImpiTrack.Application.csproj" />
     <ProjectReference Include="..\ImpiTrack.Auth.Infrastructure\ImpiTrack.Auth.Infrastructure.csproj" />
+    <ProjectReference Include="..\TcpServer\TcpServer.csproj" />
   </ItemGroup>
 
 </Project>

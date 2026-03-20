@@ -13,6 +13,8 @@ using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using TcpServer;
 
 namespace ImpiTrack.Tests;
 
@@ -144,7 +146,13 @@ public sealed class ApiPasswordRecoveryTests
                     ["Database:EnableAutoMigrate"] = "false",
                     ["Email:Enabled"] = "false",
                     ["Email:VerifyEmailBaseUrl"] = "https://localhost:5001/api/auth/verify-email/confirm",
-                    ["Email:ResetPasswordBaseUrl"] = "https://localhost:4200/auth/reset-password"
+                    ["Email:ResetPasswordBaseUrl"] = "https://localhost:4200/auth/reset-password",
+                    ["TcpServerConfig:Servers:0:Name"] = "Disabled",
+                    ["TcpServerConfig:Servers:0:Port"] = "0",
+                    ["TcpServerConfig:Servers:0:Protocol"] = "COBAN",
+                    ["TcpServerConfig:Pipeline:ChannelCapacity"] = "10",
+                    ["TcpServerConfig:Pipeline:ConsumerWorkers"] = "1",
+                    ["EventBus:Provider"] = "InMemory"
                 };
 
                 configBuilder.AddInMemoryCollection(data);
@@ -158,6 +166,7 @@ public sealed class ApiPasswordRecoveryTests
                 services.RemoveAll<IEmailSender>();
                 services.AddSingleton<CapturingEmailSender>();
                 services.AddSingleton<IEmailSender>(sp => sp.GetRequiredService<CapturingEmailSender>());
+                TestHostedServiceHelper.RemoveTcpHostedServices(services);
             });
         });
     }

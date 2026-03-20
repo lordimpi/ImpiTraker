@@ -13,7 +13,9 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
+using TcpServer;
 
 namespace ImpiTrack.Tests;
 
@@ -108,7 +110,7 @@ public sealed class ApiOpsAuthTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using JsonDocument json = await ReadJsonAsync(response);
-        JsonElement item = json.RootElement.GetProperty("data")[0];
+        JsonElement item = json.RootElement.GetProperty("data").GetProperty("items")[0];
         Assert.Equal((int)MessageType.Tracking, item.GetProperty("messageType").GetInt32());
         Assert.Equal((int)RawParseStatus.Failed, item.GetProperty("parseStatus").GetInt32());
         Assert.Equal("invalid_latitude", item.GetProperty("parseError").GetString());
@@ -130,7 +132,13 @@ public sealed class ApiOpsAuthTests
                     ["IdentityBootstrap:SeedAdminOnStart"] = "false",
                     ["Database:Provider"] = "InMemory",
                     ["Database:ConnectionString"] = string.Empty,
-                    ["Database:EnableAutoMigrate"] = "false"
+                    ["Database:EnableAutoMigrate"] = "false",
+                    ["TcpServerConfig:Servers:0:Name"] = "Disabled",
+                    ["TcpServerConfig:Servers:0:Port"] = "0",
+                    ["TcpServerConfig:Servers:0:Protocol"] = "COBAN",
+                    ["TcpServerConfig:Pipeline:ChannelCapacity"] = "10",
+                    ["TcpServerConfig:Pipeline:ConsumerWorkers"] = "1",
+                    ["EventBus:Provider"] = "InMemory"
                 };
 
                 configBuilder.AddInMemoryCollection(data);
@@ -138,6 +146,7 @@ public sealed class ApiOpsAuthTests
 
             builder.ConfigureServices(services =>
             {
+                TestHostedServiceHelper.RemoveTcpHostedServices(services);
                 services.RemoveAll<IOpsRepository>();
                 services.RemoveAll<IIngestionRepository>();
                 var store = new InMemoryOpsDataStore();

@@ -75,3 +75,38 @@ public enum UnbindDeviceStatus
     /// </summary>
     BindingNotFound = 3
 }
+
+/// <summary>
+/// Estado de actualizacion de alias de dispositivo.
+/// </summary>
+public enum UpdateDeviceAliasStatus
+{
+    /// <summary>
+    /// Alias actualizado correctamente.
+    /// </summary>
+    Updated = 1,
+
+    /// <summary>
+    /// Usuario no existe.
+    /// </summary>
+    UserNotFound = 2,
+
+    /// <summary>
+    /// No existe un vinculo activo para el IMEI.
+    /// </summary>
+    BindingNotFound = 3,
+
+    /// <summary>
+    /// El alias excede la longitud maxima permitida.
+    /// </summary>
+    AliasTooLong = 4
+}
+
+/// <summary>
+/// Resultado de operacion de alias con datos minimos.
+/// </summary>
+/// <param name="Imei">IMEI del dispositivo.</param>
+/// <param name="Alias">Alias asignado o null si fue borrado.</param>
+public sealed record DeviceAliasResult(
+    string Imei,
+    string? Alias);

@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ImpiTrack.Api.Http;
 using ImpiTrack.Application.Abstractions;
 using ImpiTrack.Shared.Api;
+using ImpiTrack.Shared.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -17,14 +18,19 @@ namespace ImpiTrack.Api.Controllers;
 public sealed class MeTelemetryController : ControllerBase
 {
     private readonly ITelemetryQueryService _telemetryQueryService;
+    private readonly IMeAccountService _meAccountService;
 
     /// <summary>
     /// Crea un controlador de telemetria para el usuario autenticado.
     /// </summary>
     /// <param name="telemetryQueryService">Casos de uso de lectura de telemetria.</param>
-    public MeTelemetryController(ITelemetryQueryService telemetryQueryService)
+    /// <param name="meAccountService">Casos de uso de cuenta del usuario autenticado.</param>
+    public MeTelemetryController(
+        ITelemetryQueryService telemetryQueryService,
+        IMeAccountService meAccountService)
     {
         _telemetryQueryService = telemetryQueryService;
+        _meAccountService = meAccountService;
     }
 
     /// <summary>
@@ -49,6 +55,47 @@ public sealed class MeTelemetryController : ControllerBase
         }
 
         return this.OkEnvelope(data);
+    }
+
+    /// <summary>
+    /// Asigna o borra el alias de un dispositivo vinculado al usuario autenticado.
+    /// </summary>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="request">Datos del alias.</param>
+    /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
+    /// <returns>Resultado con IMEI y alias actualizado.</returns>
+    [HttpPut("devices/{imei}/alias")]
+    [ProducesResponseType(typeof(ApiResponse<DeviceAliasResult>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<DeviceAliasResult>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<DeviceAliasResult>), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiResponse<DeviceAliasResult>), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<DeviceAliasResult>>> SetDeviceAlias(
+        [FromRoute] string imei,
+        [FromBody] UpdateDeviceAliasRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUserId(out Guid userId))
+        {
+            return UnauthorizedEnvelope<DeviceAliasResult>();
+        }
+
+        UpdateDeviceAliasStatus status = await _meAccountService.UpdateDeviceAliasAsync(
+            userId,
+            imei,
+            request.Alias,
+            cancellationToken);
+
+        return status switch
+        {
+            UpdateDeviceAliasStatus.Updated => this.OkEnvelope(
+                new DeviceAliasResult(imei, string.IsNullOrWhiteSpace(request.Alias) ? null : request.Alias.Trim())),
+            UpdateDeviceAliasStatus.AliasTooLong => this.FailEnvelope<DeviceAliasResult>(
+                StatusCodes.Status400BadRequest,
+                "alias_too_long",
+                "El alias no puede superar los 50 caracteres."),
+            UpdateDeviceAliasStatus.BindingNotFound => DeviceBindingNotFoundEnvelope<DeviceAliasResult>(),
+            _ => UnauthorizedEnvelope<DeviceAliasResult>()
+        };
     }
 
     /// <summary>

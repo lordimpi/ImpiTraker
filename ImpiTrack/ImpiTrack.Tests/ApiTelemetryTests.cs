@@ -12,6 +12,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using TcpServer;
 
 namespace ImpiTrack.Tests;
 
@@ -60,6 +62,33 @@ public sealed class ApiTelemetryTests
         Assert.NotNull(device.LastPosition);
         Assert.Equal(4.7110, device.LastPosition!.Latitude, 3);
         Assert.Equal(-74.0721, device.LastPosition.Longitude, 3);
+    }
+
+    [Fact]
+    public async Task MeTelemetryDevices_ShouldReturnAliasAsNull_ForExistingBinding()
+    {
+        await using var factory = CreateFactory();
+        using HttpClient client = factory.CreateClient();
+
+        AuthTokenPairResponse token = await RegisterVerifyLoginAndBindAsync(
+            client,
+            "alias.null.user",
+            "alias.null.user@imptrack.local",
+            "359586015829803");
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+
+        HttpResponseMessage response = await client.GetAsync("/api/me/telemetry/devices");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ApiEnvelope<List<TelemetryDeviceSummaryResponse>>? payload =
+            await response.Content.ReadFromJsonAsync<ApiEnvelope<List<TelemetryDeviceSummaryResponse>>>();
+        Assert.NotNull(payload);
+        Assert.True(payload!.Success);
+        Assert.NotNull(payload.Data);
+        TelemetryDeviceSummaryResponse device = Assert.Single(payload.Data!);
+        Assert.Equal("359586015829803", device.Imei);
+        Assert.Null(device.Alias);
     }
 
     [Fact]
@@ -355,7 +384,13 @@ public sealed class ApiTelemetryTests
                     ["IdentityBootstrap:UserRole"] = "User",
                     ["Database:Provider"] = "InMemory",
                     ["Database:ConnectionString"] = string.Empty,
-                    ["Database:EnableAutoMigrate"] = "false"
+                    ["Database:EnableAutoMigrate"] = "false",
+                    ["TcpServerConfig:Servers:0:Name"] = "Disabled",
+                    ["TcpServerConfig:Servers:0:Port"] = "0",
+                    ["TcpServerConfig:Servers:0:Protocol"] = "COBAN",
+                    ["TcpServerConfig:Pipeline:ChannelCapacity"] = "10",
+                    ["TcpServerConfig:Pipeline:ConsumerWorkers"] = "1",
+                    ["EventBus:Provider"] = "InMemory"
                 };
 
                 configBuilder.AddInMemoryCollection(data);
@@ -366,6 +401,7 @@ public sealed class ApiTelemetryTests
                 services.AddDataProtection().UseEphemeralDataProtectionProvider();
                 services.RemoveAll<IOpsDataStore>();
                 services.AddSingleton<IOpsDataStore, InMemoryOpsDataStore>();
+                TestHostedServiceHelper.RemoveTcpHostedServices(services);
             });
         });
     }
@@ -682,6 +718,8 @@ public sealed class ApiTelemetryTests
         public int? LastMessageType { get; set; }
 
         public LastKnownPositionResponse? LastPosition { get; set; }
+
+        public string? Alias { get; set; }
     }
 
     private sealed class LastKnownPositionResponse

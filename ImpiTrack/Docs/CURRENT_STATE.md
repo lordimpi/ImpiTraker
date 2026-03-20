@@ -3,7 +3,8 @@
 Role: current-state  
 Status: active  
 Owner: backend-maintainers  
-Last Reviewed: 2026-03-18
+Last Reviewed: 2026-03-19  
+Last Updated: 2026-03-19 (device-presence-detection)
 
 This document is the canonical source of truth for the current backend/runtime state of this repository.
 
@@ -15,10 +16,10 @@ Not canonical:
 
 ## 1. What This Repo Is
 
-IMPITrack is a backend-focused GPS telemetry platform repository. The current solution is organized around:
+IMPITrack is a backend-focused GPS telemetry platform repository. The current solution runs as a **single unified process**:
 
-- `TcpServer`: TCP ingestion service for device traffic.
-- `ImpiTrack.Api`: HTTP API for auth, admin, me, ops, health, and OpenAPI/Scalar exposure.
+- `ImpiTrack.Api`: HTTP API for auth, admin, me, ops, health, OpenAPI/Scalar, and SignalR real-time push. Hosts TCP ingestion services in-process.
+- `TcpServer`: class library (not a standalone executable) providing TCP ingestion services (`Worker`, `InboundProcessingService`, `RawPacketProcessingService`). Registered into the API host via `AddTcpServerServices()`. A `#if STANDALONE_HOST` guard in `Program.cs` preserves a standalone entry point for isolated debugging only.
 - shared libraries for application logic, auth infrastructure, SQL persistence, protocol parsing, observability, and tests.
 
 Frontend work is not part of this repository.
@@ -39,9 +40,10 @@ If a future document does not fit one of those roles, it should not be treated a
 
 Current repository structure verified from `ImpiTrack/ImpiTrack.sln` and project layout:
 
-- services:
-  - `ImpiTrack/TcpServer/TcpServer.csproj`
-  - `ImpiTrack/ImpiTrack.Api/ImpiTrack.Api.csproj`
+- host:
+  - `ImpiTrack/ImpiTrack.Api/ImpiTrack.Api.csproj` — single executable host (HTTP + TCP + SignalR)
+- class libraries (TCP ingestion):
+  - `ImpiTrack/TcpServer/TcpServer.csproj` — class library, hosted in-process by API
 - shared/backend libraries:
   - `ImpiTrack/ImpiTrack.Application`
   - `ImpiTrack/ImpiTrack.Auth.Infrastructure`
@@ -66,7 +68,7 @@ Shared                   ← no dependencies  (Options pattern + HTTP DTOs)
 Application              → Shared, Protocols.Abstractions
 DataAccess               → Application, Ops, Tcp.Core, Protocols.Abstractions, Shared
 Auth.Infrastructure      → DataAccess, Shared, Application
-Api                      → Ops, DataAccess, Shared, Application, Auth.Infrastructure
+Api                      → Ops, DataAccess, Shared, Application, Auth.Infrastructure, TcpServer
 TcpServer                → Tcp.Core, Protocols.Coban, Protocols.Cantrack, Protocols.Abstractions,
                            Observability, Ops, DataAccess, Shared
 Tests                    → Tcp.Core, Protocols.Abstractions, Protocols.Coban, Protocols.Cantrack,
@@ -89,14 +91,20 @@ Key architectural constraints enforced:
 | `IIngestionRepository` | `ImpiTrack.DataAccess` | `DataAccess` | Infrastructure-only; depends on `Tcp.Core.Queue` — intentionally kept in DataAccess |
 | `IOpsRepository`, `IDbConnectionFactory`, `IMigrationRunner` | `ImpiTrack.DataAccess` | `DataAccess` | Pure infrastructure contracts with no domain meaning |
 | `IGenericOptionsService`, `GenericOptionsService` | `ImpiTrack.Shared.Options` | `Shared` | Cross-cutting; used by TcpServer and DataAccess without circular deps |
+| `ITelemetryNotifier` | `ImpiTrack.Application.Abstractions` | `Application` | Domain contract for real-time push; implemented by `SignalRTelemetryNotifier` (Api) and `NullTelemetryNotifier` (Application, fallback) |
+| `IDeviceOwnershipResolver` | `ImpiTrack.Application.Abstractions` | `Application` | Resolves IMEI → userId(s); implemented by `CachedDeviceOwnershipResolver` (Api) |
+| `IDevicePresenceTracker` | `ImpiTrack.Application.Abstractions` | `Application` | Domain contract for device online/offline tracking; implemented by `DevicePresenceTracker` (Application) |
+| `DevicePresenceOptions` | `ImpiTrack.Application.Abstractions` | `Application` | Options pattern for presence detection config (`DevicePresence` section) |
+| `PositionUpdatedMessage`, `DeviceStatusChangedMessage`, `TelemetryEventOccurredMessage` | `ImpiTrack.Application.Abstractions` | `Application` | SignalR push DTOs in `RealtimeDtos.cs` |
 
 Operational shape today:
 
-1. GPS devices talk to `TcpServer` over TCP.
-2. TCP framing/parsing/ACK happens in the ingestion path.
-3. raw packets and normalized telemetry are persisted through `ImpiTrack.DataAccess`.
-4. `ImpiTrack.Api` reads the persisted state for auth, device ownership, health, and ops endpoints.
-5. OpenAPI and Scalar document the HTTP contract during Development.
+1. GPS devices connect to TCP listeners hosted in-process by the API (via `TcpServer` class library).
+2. TCP framing/parsing/ACK happens in the ingestion path (`Worker` → `InboundProcessingService`).
+3. Raw packets and normalized telemetry are persisted through `ImpiTrack.DataAccess`.
+4. After successful persistence, `InboundProcessingService` fires real-time notifications via `ITelemetryNotifier` (see §6.8).
+5. `ImpiTrack.Api` serves REST endpoints for auth, device ownership, health, ops, and exposes SignalR hub at `/hubs/telemetry`.
+6. OpenAPI and Scalar document the HTTP contract during Development.
 
 ## 4. Runtime State Verified In Repo
 
@@ -105,6 +113,8 @@ Operational shape today:
 - Development OpenAPI is mapped with `app.MapOpenApi()`.
 - Development Scalar UI is mapped at `/scalar/v1`.
 - Scalar is configured in `ImpiTrack/ImpiTrack.Api/Program.cs`.
+- SignalR hub mapped at `/hubs/telemetry` (authenticated, JWT via `?access_token` query string).
+- CORS: configurable origins via `Cors:AllowedOrigins` in appsettings. Uses `AllowCredentials()` — required for SignalR WebSocket transport. Previous `AllowAnyOrigin()` was incompatible with `AllowCredentials()` and was replaced.
 
 ### Development defaults
 
@@ -114,14 +124,10 @@ From `ImpiTrack/ImpiTrack.Api/appsettings.Development.json`:
 - `IdentityStorage:Provider = SqlServer`
 - `Database:EnableAutoMigrate = true`
 - `EventBus:Provider = InMemory`
-
-From `ImpiTrack/TcpServer/appsettings.Development.json`:
-
-- TCP listeners:
+- `Cors:AllowedOrigins = ["http://localhost:4200", "http://localhost:3000"]`
+- TCP listeners (hosted in-process):
   - `5001` for `COBAN`
   - `5002` for `CANTRACK`
-- `Database:Provider = SqlServer`
-- `EventBus:Provider = Emqx`
 - `TcpServerConfig:Pipeline:ConsumerWorkers = 2`
 - `TcpServerConfig:Pipeline:RawConsumerWorkers = 2`
 
@@ -183,7 +189,50 @@ occurred_at_utc  DATETIMEOFFSET  NULL
 
 This column stores the event timestamp derived from the GPS clock. It is used by the trip detection engine to correlate ACC events with position data.
 
-### 6.5 Trip Detection — movement_2d_acc_v2
+### 6.5 Database Schema — user_devices alias (V008)
+
+Migration `V008__user_devices_alias` (SqlServer and PostgreSQL) adds column:
+
+```
+alias  NVARCHAR(50) / VARCHAR(50)  NULL
+```
+
+This column stores a user-assigned friendly name for a device binding. The alias is scoped per user-device binding (not global to the device). It is nullable: when null or empty, the device has no alias.
+
+Affected domain models:
+
+| Model | Project | Change |
+|---|---|---|
+| `UserDeviceBinding` | `Application.Abstractions` | Added `string? Alias = null` |
+| `TelemetryDeviceSummaryDto` | `Application.Abstractions` | Added `string? Alias = null` |
+| `DeviceAliasResult` | `Application.Abstractions` | New record: `(string Imei, string? Alias)` |
+| `UpdateDeviceAliasRequest` | `Shared.Models` | New DTO: `{ string? Alias }` |
+| `UpdateDeviceAliasStatus` | `Application.Abstractions` | New enum: `Updated`, `UserNotFound`, `BindingNotFound`, `AliasTooLong` |
+
+### 6.6 Device Alias API Endpoints
+
+Two endpoints expose alias management:
+
+| Endpoint | Route | Auth |
+|---|---|---|
+| User self-service | `PUT /api/me/telemetry/devices/{imei}/alias` | `[Authorize]` |
+| Admin on behalf of user | `PUT /api/admin/users/{userId}/telemetry/devices/{imei}/alias` | `[Authorize(Policy = "Admin")]` |
+
+Request body: `{ "alias": "string or null" }`
+
+Behavior:
+- Sets alias when `alias` is a non-empty string (trimmed, max 50 chars).
+- Clears alias when `alias` is null, empty, or whitespace-only (stored as `NULL`).
+- Returns `200 OK` with `DeviceAliasResult(Imei, Alias)` on success.
+- Returns `400 Bad Request` (`alias_too_long`) when trimmed alias exceeds 50 characters.
+- Returns `404 Not Found` (`device_binding_not_found`) when no active binding exists for the IMEI.
+- Admin endpoint also returns `404` (`user_not_found`) when the target user does not exist.
+
+The alias is also included in `GET /api/me/telemetry/devices` and `GET /api/admin/users/{userId}/telemetry/devices` responses via `TelemetryDeviceSummaryDto.Alias`.
+
+Service layer: `MeAccountService.UpdateDeviceAliasAsync` and `AdminUsersService.UpdateDeviceAliasAsync` implement identical validation logic (normalize whitespace, enforce max length) and delegate to `IUserAccountRepository.UpdateDeviceAliasAsync`.
+
+### 6.7 Trip Detection — movement_2d_acc_v2
 
 Trip detection runs in `TelemetryQueryService.BuildTrips`. The active algorithm identifier is `movement_2d_acc_v2`.
 
@@ -203,6 +252,115 @@ Trip detection runs in `TelemetryQueryService.BuildTrips`. The active algorithm 
 2. `GetAccEventsForWindowAsync` queries `device_events` for `ACC_ON` / `ACC_OFF` records.
 3. `AnnotateWithAccState` stamps each position point with the last known ACC state prior to its timestamp.
 4. `BuildTrips` uses annotated `IgnitionOn` field to drive open/close logic; falls back to speed+2D if `hasAccData = false`.
+
+### 6.8 Real-Time Telemetry — SignalR Push Notifications
+
+Real-time push notifications are delivered to connected clients via a SignalR hub at `/hubs/telemetry`.
+
+**Architecture:**
+
+The notification chain is: `InboundProcessingService` → `ITelemetryNotifier` → `IDeviceOwnershipResolver` → `IHubContext<TelemetryHub>`.
+
+| Component | Project | Responsibility |
+|---|---|---|
+| `ITelemetryNotifier` | `Application` (abstractions) | Domain contract for push notifications |
+| `SignalRTelemetryNotifier` | `Api` (`Services/`) | Production implementation: resolves device owners, sends to SignalR groups |
+| `NullTelemetryNotifier` | `Application` (abstractions) | No-op fallback when SignalR is unavailable (e.g. TcpServer standalone mode) |
+| `IDeviceOwnershipResolver` | `Application` (abstractions) | Resolves IMEI → `IReadOnlyList<Guid>` userId(s) |
+| `CachedDeviceOwnershipResolver` | `Api` (`Services/`) | Production implementation with `IMemoryCache`, TTL 30s per IMEI |
+| `TelemetryHub` | `Api` (`Hubs/`) | SignalR hub, `[Authorize]`, groups by `user_{userId}` |
+
+**Push events (server → client, unidirectional):**
+
+| SignalR Event | Trigger | Payload |
+|---|---|---|
+| `PositionUpdated` | Each GPS tracking message persisted | `PositionUpdatedMessage(Imei, Latitude, Longitude, SpeedKmh, HeadingDeg, OccurredAtUtc, IgnitionOn)` |
+| `DeviceStatusChanged` | Device connection state change | `DeviceStatusChangedMessage(Imei, Status, ChangedAtUtc)` |
+| `TelemetryEventOccurred` | ACC/PWR state change event persisted | `TelemetryEventOccurredMessage(Imei, EventType, Latitude, Longitude, OccurredAtUtc)` |
+
+**Client authentication:** JWT is passed via `?access_token` query string parameter (standard SignalR pattern for WebSocket connections where `Authorization` header is unavailable).
+
+**User isolation:** Each authenticated client is added to group `user_{userId}` on connect. Notifications are sent only to groups corresponding to the device's owners via `IDeviceOwnershipResolver`.
+
+**Resilience:** `SignalRTelemetryNotifier` wraps every notification in try/catch. A SignalR failure (hub unavailable, client disconnected, network error) is logged but **never** interrupts the persistence pipeline. `InboundProcessingService` calls `ITelemetryNotifier` **after** successful persistence.
+
+**DI registration in API (`Program.cs`):**
+
+- `AddSignalR()` — registers SignalR infrastructure.
+- `AddMemoryCache()` — for `CachedDeviceOwnershipResolver`.
+- `AddSingleton<IDeviceOwnershipResolver, CachedDeviceOwnershipResolver>()`.
+- `AddSingleton<ITelemetryNotifier, SignalRTelemetryNotifier>()` — overrides the `NullTelemetryNotifier` default registered by `TcpServer.ServiceCollectionExtensions` via `TryAddSingleton`.
+
+**TcpServer fallback registration:** `ServiceCollectionExtensions.AddTcpServerServices()` registers `NullTelemetryNotifier` via `TryAddSingleton<ITelemetryNotifier>`. Since API registers `SignalRTelemetryNotifier` before calling `AddTcpServerServices()`, the `TryAdd` is a no-op in the unified host. In standalone debug mode, `NullTelemetryNotifier` activates as the default.
+
+### 6.9 Testing Strategy — Integration Tests With TestHostedServiceHelper
+
+Integration tests for API endpoints (`ApiAuthFlowTests`, `ApiOpsAuthTests`, `ApiRegistrationAndAccountTests`, `ApiTelemetryTests`, `ApiPasswordRecoveryTests`) use `WebApplicationFactory<Program>`. Because the API now hosts TCP services in-process, these hosted services (`Worker`, `InboundProcessingService`, `RawPacketProcessingService`) would attempt to bind TCP ports during test startup.
+
+`TestHostedServiceHelper.RemoveTcpHostedServices(IServiceCollection)` removes the four TCP `IHostedService` registrations (`Worker`, `InboundProcessingService`, `RawPacketProcessingService`, `DevicePresenceMonitor`) from the DI container during test configuration, preventing port binding conflicts and background scanning during tests.
+
+SignalR-specific tests (`SignalRTelemetryNotifierTests`, `NotificationResilienceTests`) test the notification chain in isolation with mocked `IHubContext<TelemetryHub>` and stub `IDeviceOwnershipResolver`, verifying:
+
+- Correct routing to `user_{userId}` groups.
+- All three events are dispatched to the right recipients.
+- Exception resilience: notifier failures do not propagate to the caller.
+- `NullTelemetryNotifier` silently no-ops without exceptions.
+
+### 6.10 Device Presence Detection (Online/Offline)
+
+Device presence detection determines whether a GPS device is online or offline based on the time since its last received packet. This is an in-memory, real-time mechanism — it does not persist state to the database.
+
+**Architecture:**
+
+| Component | Project | Responsibility |
+|---|---|---|
+| `IDevicePresenceTracker` | `Application` (abstractions) | Domain contract: `RecordActivity(imei)` → bool (newly online?), `DetectAndRemoveOfflineDevices(threshold)` → offline IMEIs |
+| `DevicePresenceTracker` | `Application` (abstractions) | In-memory implementation using `ConcurrentDictionary<string, DateTimeOffset>`. IMEI keys are case-insensitive. Registered as singleton. |
+| `DevicePresenceOptions` | `Application` (abstractions) | Options pattern bound to `DevicePresence` section in appsettings |
+| `DevicePresenceMonitor` | `TcpServer` | `BackgroundService` that scans the tracker on a periodic timer and notifies offline transitions via `ITelemetryNotifier` |
+
+**Online detection (InboundProcessingService):**
+
+After successful persistence of each packet (and only when the device is owned — `SkippedUnownedDevice` is excluded), `InboundProcessingService` calls `_presenceTracker.RecordActivity(imei)`. If `RecordActivity` returns `true` (device was not previously tracked, or its last packet exceeded the offline threshold), the service fires `NotifyDeviceStatusChangedAsync(imei, "Online", ...)` via `ITelemetryNotifier`. This integrates with the existing SignalR push infrastructure (§6.8) to deliver real-time online events to connected clients.
+
+**Offline detection (DevicePresenceMonitor):**
+
+`DevicePresenceMonitor` is a `BackgroundService` running on its own `PeriodicTimer` cycle, independent of the TCP processing pipeline. Each tick:
+
+1. Calls `DetectAndRemoveOfflineDevices(offlineThreshold)` on the shared singleton tracker.
+2. For each IMEI returned (exceeded the inactivity threshold), fires `NotifyDeviceStatusChangedAsync(imei, "Offline", ...)`.
+3. Removed devices are no longer tracked. If they send a new packet, `RecordActivity` returns `true` again (re-online transition).
+
+Errors in the offline notification loop are caught per-IMEI and logged — a failure for one device does not block notification of subsequent devices.
+
+**Configuration (`DevicePresence` section in appsettings):**
+
+| Key | Default | Description |
+|---|---|---|
+| `OfflineThresholdMinutes` | `10` | Minutes of inactivity before a device is considered offline. Minimum enforced: 1. |
+| `CheckIntervalSeconds` | `60` | Seconds between each offline scan cycle. Minimum enforced: 5. |
+
+**DI registration (TcpServer `ServiceCollectionExtensions.AddTcpServerServices()`):**
+
+- `BindOptions<DevicePresenceOptions>(configuration, "DevicePresence")` — binds configuration section.
+- `TryAddSingleton<IDevicePresenceTracker, DevicePresenceTracker>()` — singleton shared between `InboundProcessingService` (online detection) and `DevicePresenceMonitor` (offline detection).
+- `AddHostedService<DevicePresenceMonitor>()` — registers the periodic scanner.
+
+**SignalR integration:** Online/offline transitions reuse the existing `DeviceStatusChanged` SignalR event (§6.8) with `Status` values `"Online"` and `"Offline"`. No new SignalR events were added.
+
+**Testing (10 unit tests in `DevicePresenceTrackerTests`):**
+
+- `RecordActivity`: first call returns newly online; second within threshold returns false; different IMEIs independently online; IMEI matching is case-insensitive.
+- `DetectAndRemoveOfflineDevices`: empty tracker returns empty; recent activity not detected; zero threshold detects all; removal is effective (second scan returns empty); post-removal `RecordActivity` returns newly online again.
+- Concurrency: 50 parallel tasks calling `RecordActivity` without exceptions, verifying thread-safety of the `ConcurrentDictionary` approach.
+
+**Test infrastructure:** `TestHostedServiceHelper.RemoveTcpHostedServices` includes `DevicePresenceMonitor` in its removal list alongside `Worker`, `InboundProcessingService`, and `RawPacketProcessingService`, preventing the monitor from running during API integration tests.
+
+**Design constraints:**
+
+- **In-memory only:** Presence state is not persisted to disk or database. A process restart resets all devices to unknown (first packet will trigger an online transition).
+- **No heartbeat protocol:** Detection relies solely on data packets. A device that is powered on but not sending GPS data (e.g. no satellite fix) will appear offline after the threshold.
+- **Single-process scope:** The `ConcurrentDictionary` is per-process. In a multi-instance deployment, each instance tracks only devices whose TCP connections it handles.
 
 ## 7. Known Limits And Boundaries
 
@@ -251,6 +409,30 @@ This current-state document was aligned against the repository structure and exi
 - `ImpiTrack/ImpiTrack.Application/Services/TelemetryQueryService.cs`
 - `ImpiTrack/ImpiTrack.Protocols.Abstractions/ParsedMessage.cs`
 - `ImpiTrack/ImpiTrack.DataAccess/db/sqlserver/V007__device_events_occurred_at.sql`
+- `ImpiTrack/ImpiTrack.DataAccess/db/sqlserver/V008__user_devices_alias.sql`
+- `ImpiTrack/ImpiTrack.DataAccess/db/postgres/V008__user_devices_alias.sql`
+- `ImpiTrack/ImpiTrack.Api/Controllers/MeTelemetryController.cs`
+- `ImpiTrack/ImpiTrack.Api/Controllers/AdminUserTelemetryController.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/ServiceResults.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/UserAccountModels.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/TelemetryModels.cs`
+- `ImpiTrack/ImpiTrack.Shared/Models/UpdateDeviceAliasRequest.cs`
+- `ImpiTrack/ImpiTrack.Api/Hubs/TelemetryHub.cs`
+- `ImpiTrack/ImpiTrack.Api/Services/SignalRTelemetryNotifier.cs`
+- `ImpiTrack/ImpiTrack.Api/Services/CachedDeviceOwnershipResolver.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/ITelemetryNotifier.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/IDeviceOwnershipResolver.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/NullTelemetryNotifier.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/RealtimeDtos.cs`
+- `ImpiTrack/TcpServer/ServiceCollectionExtensions.cs`
+- `ImpiTrack/ImpiTrack.Tests/TestHostedServiceHelper.cs`
+- `ImpiTrack/ImpiTrack.Tests/SignalRTelemetryNotifierTests.cs`
+- `ImpiTrack/ImpiTrack.Tests/NotificationResilienceTests.cs`
 - `ImpiTrack/Docs/BACKEND_MAINTENANCE_GUIDE.md` (superseded by this file)
 - the active solution/project layout under `ImpiTrack/`
-- all `.csproj` project references (verified 2026-03-18, post `abstractions-placement-refactor`)
+- `ImpiTrack/ImpiTrack.Application/Abstractions/IDevicePresenceTracker.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/DevicePresenceTracker.cs`
+- `ImpiTrack/ImpiTrack.Application/Abstractions/DevicePresenceOptions.cs`
+- `ImpiTrack/TcpServer/DevicePresenceMonitor.cs`
+- `ImpiTrack/ImpiTrack.Tests/DevicePresenceTrackerTests.cs`
+- all `.csproj` project references (verified 2026-03-19, post `device-presence-detection`)

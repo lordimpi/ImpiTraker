@@ -1,10 +1,12 @@
+#if STANDALONE_HOST
 using OpenTelemetry.Metrics;
 using Serilog;
 
 namespace TcpServer;
 
 /// <summary>
-/// Punto de entrada de la aplicacion para el host worker TCP.
+/// Punto de entrada standalone para depuracion del host worker TCP.
+/// En produccion, los servicios TCP se hospedan dentro del proceso API.
 /// </summary>
 public class Program
 {
@@ -55,3 +57,4 @@ public class Program
             });
     }
 }
+#endif

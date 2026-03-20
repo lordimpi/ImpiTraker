@@ -90,4 +90,13 @@ public interface ITelemetryQueryRepository
         DateTimeOffset fromUtc,
         DateTimeOffset toUtc,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene los identificadores de usuarios con vinculo activo para un IMEI.
+    /// Usado por el resolver de ownership para enrutar notificaciones SignalR.
+    /// </summary>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Lista de user IDs con vinculo activo para el IMEI.</returns>
+    Task<IReadOnlyList<Guid>> GetActiveUserIdsByImeiAsync(string imei, CancellationToken cancellationToken);
 }

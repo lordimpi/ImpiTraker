@@ -14,12 +14,13 @@ public interface IMeAccountService
     Task<UserAccountSummary?> GetSummaryAsync(Guid userId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Obtiene dispositivos vinculados.
+    /// Obtiene dispositivos vinculados de forma paginada.
     /// </summary>
     /// <param name="userId">Identificador del usuario autenticado.</param>
+    /// <param name="query">Parametros de paginacion.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
-    /// <returns>Lista de dispositivos o <c>null</c> si el usuario no existe.</returns>
-    Task<IReadOnlyList<UserDeviceBinding>?> GetDevicesAsync(Guid userId, CancellationToken cancellationToken);
+    /// <returns>Resultado paginado de dispositivos o <c>null</c> si el usuario no existe.</returns>
+    Task<PagedResult<UserDeviceBinding>?> GetDevicesPagedAsync(Guid userId, MeDeviceListQuery query, CancellationToken cancellationToken);
 
     /// <summary>
     /// Vincula un IMEI a la cuenta del usuario.
@@ -38,4 +39,14 @@ public interface IMeAccountService
     /// <param name="cancellationToken">Token de cancelacion.</param>
     /// <returns>Estado de la operacion.</returns>
     Task<UnbindDeviceStatus> UnbindDeviceAsync(Guid userId, string imei, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Actualiza el alias de un dispositivo vinculado al usuario.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario autenticado.</param>
+    /// <param name="imei">IMEI del dispositivo.</param>
+    /// <param name="alias">Nuevo alias o null para borrar.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Estado de la operacion.</returns>
+    Task<UpdateDeviceAliasStatus> UpdateDeviceAliasAsync(Guid userId, string imei, string? alias, CancellationToken cancellationToken);
 }

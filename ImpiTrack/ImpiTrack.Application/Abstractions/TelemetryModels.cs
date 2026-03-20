@@ -12,6 +12,7 @@ namespace ImpiTrack.Application.Abstractions;
 /// <param name="Protocol">Ultimo protocolo observado cuando existe.</param>
 /// <param name="LastMessageType">Ultimo tipo de mensaje observado cuando existe.</param>
 /// <param name="LastPosition">Ultima posicion georreferenciada cuando existe.</param>
+/// <param name="Alias">Alias opcional asignado por el usuario.</param>
 public sealed record TelemetryDeviceSummaryDto(
     string Imei,
     DateTimeOffset BoundAtUtc,
@@ -19,7 +20,8 @@ public sealed record TelemetryDeviceSummaryDto(
     Guid? ActiveSessionId,
     ProtocolId? Protocol,
     MessageType? LastMessageType,
-    LastKnownPositionDto? LastPosition);
+    LastKnownPositionDto? LastPosition,
+    string? Alias = null);
 
 /// <summary>
 /// Ultima posicion georreferenciada conocida de un dispositivo.

@@ -30,7 +30,7 @@ public sealed class MeAccountService : IMeAccountService
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<UserDeviceBinding>?> GetDevicesAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task<PagedResult<UserDeviceBinding>?> GetDevicesPagedAsync(Guid userId, MeDeviceListQuery query, CancellationToken cancellationToken)
     {
         UserAccountSummary? summary = await GetOrProvisionSummaryAsync(userId, cancellationToken);
         if (summary is null)
@@ -38,7 +38,7 @@ public sealed class MeAccountService : IMeAccountService
             return null;
         }
 
-        return await _userAccountRepository.GetUserDevicesAsync(userId, cancellationToken);
+        return await _userAccountRepository.GetUserDevicesPagedMeAsync(userId, query, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -76,6 +76,34 @@ public sealed class MeAccountService : IMeAccountService
             cancellationToken);
 
         return removed ? UnbindDeviceStatus.Removed : UnbindDeviceStatus.BindingNotFound;
+    }
+
+    /// <inheritdoc />
+    public async Task<UpdateDeviceAliasStatus> UpdateDeviceAliasAsync(
+        Guid userId,
+        string imei,
+        string? alias,
+        CancellationToken cancellationToken)
+    {
+        UserAccountSummary? summary = await GetOrProvisionSummaryAsync(userId, cancellationToken);
+        if (summary is null)
+        {
+            return UpdateDeviceAliasStatus.UserNotFound;
+        }
+
+        string? normalizedAlias = string.IsNullOrWhiteSpace(alias) ? null : alias.Trim();
+        if (normalizedAlias is not null && normalizedAlias.Length > 50)
+        {
+            return UpdateDeviceAliasStatus.AliasTooLong;
+        }
+
+        bool updated = await _userAccountRepository.UpdateDeviceAliasAsync(
+            userId,
+            imei.Trim(),
+            normalizedAlias,
+            cancellationToken);
+
+        return updated ? UpdateDeviceAliasStatus.Updated : UpdateDeviceAliasStatus.BindingNotFound;
     }
 
     private async Task<UserAccountSummary?> GetOrProvisionSummaryAsync(Guid userId, CancellationToken cancellationToken)

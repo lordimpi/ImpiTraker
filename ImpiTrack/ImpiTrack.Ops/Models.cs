@@ -99,6 +99,32 @@ public sealed record ErrorAggregate(
     PacketId? LastPacketId);
 
 /// <summary>
+/// Parametros de consulta paginada para paquetes raw recientes.
+/// </summary>
+/// <param name="Page">Pagina solicitada (base 1).</param>
+/// <param name="PageSize">Tamano de pagina (valores permitidos: 10, 20, 50, 100).</param>
+/// <param name="Imei">IMEI opcional para filtrar.</param>
+public sealed record OpsRawListQuery(int Page, int PageSize, string? Imei);
+
+/// <summary>
+/// Parametros de consulta paginada para sesiones activas.
+/// </summary>
+/// <param name="Page">Pagina solicitada (base 1).</param>
+/// <param name="PageSize">Tamano de pagina (valores permitidos: 10, 20, 50, 100).</param>
+/// <param name="Port">Puerto opcional para filtrar.</param>
+public sealed record OpsSessionListQuery(int Page, int PageSize, int? Port);
+
+/// <summary>
+/// Parametros de consulta paginada para agregados de errores de parseo.
+/// </summary>
+/// <param name="Page">Pagina solicitada (base 1).</param>
+/// <param name="PageSize">Tamano de pagina (valores permitidos: 10, 20, 50, 100).</param>
+/// <param name="From">Inicio opcional del rango UTC.</param>
+/// <param name="To">Fin opcional del rango UTC.</param>
+/// <param name="GroupBy">Criterio de agrupacion: protocol, port o errorCode.</param>
+public sealed record OpsErrorListQuery(int Page, int PageSize, DateTimeOffset? From, DateTimeOffset? To, string GroupBy);
+
+/// <summary>
 /// Snapshot de ingesta por puerto para monitoreo operativo.
 /// </summary>
 /// <param name="Port">Puerto del listener.</param>

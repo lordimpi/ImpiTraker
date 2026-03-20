@@ -1,4 +1,5 @@
-﻿using ImpiTrack.DataAccess.Extensions;
+﻿using ImpiTrack.Application.Abstractions;
+using ImpiTrack.DataAccess.Extensions;
 using ImpiTrack.Shared.Options;
 using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Protocols.Cantrack;
@@ -11,6 +12,7 @@ using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
 using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using TcpServer.EventBus;
 using TcpServer.RawQueue;
@@ -123,9 +125,20 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAckStrategy, CobanAckStrategy>();
         services.AddSingleton<IAckStrategy, CantrackAckStrategy>();
 
+        services.TryAddSingleton<ITelemetryNotifier, NullTelemetryNotifier>();
+
+        services
+            .BindOptions<DevicePresenceOptions>(
+                configuration,
+                DevicePresenceOptions.SectionName,
+                validateDataAnnotations: false,
+                validateOnStart: false);
+        services.TryAddSingleton<IDevicePresenceTracker, DevicePresenceTracker>();
+
         services.AddHostedService<Worker>();
         services.AddHostedService<InboundProcessingService>();
         services.AddHostedService<RawPacketProcessingService>();
+        services.AddHostedService<DevicePresenceMonitor>();
         return services;
     }
 
