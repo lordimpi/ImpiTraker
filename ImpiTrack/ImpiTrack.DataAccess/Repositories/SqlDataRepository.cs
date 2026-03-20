@@ -308,22 +308,39 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<RawPacketRecord>> GetLatestRawPacketsAsync(
-        string? imei,
-        int limit,
+    public async Task<PagedResult<RawPacketRecord>> GetLatestRawPacketsAsync(
+        OpsRawListQuery query,
         CancellationToken cancellationToken)
     {
-        int normalizedLimit = Math.Clamp(limit, 1, 500);
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+        int offset = (page - 1) * pageSize;
+
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var parameters = new { Imei = query.Imei, Offset = offset, PageSize = pageSize };
+
+        CommandDefinition countCommand = new(
+            GetRawPacketsCountSql(_context.Provider),
+            parameters,
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        long totalItems = await connection.QuerySingleAsync<long>(countCommand);
 
         CommandDefinition command = new(
-            GetLatestRawPacketsSql(_context.Provider),
-            new { Imei = imei, Limit = normalizedLimit },
+            GetRawPacketsPageSql(_context.Provider),
+            parameters,
             commandTimeout: _context.CommandTimeoutSeconds,
             cancellationToken: cancellationToken);
 
         IEnumerable<RawPacketRow> rows = await connection.QueryAsync<RawPacketRow>(command);
-        return rows.Select(ToRawPacketRecord).ToArray();
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        return new PagedResult<RawPacketRecord>(
+            rows.Select(ToRawPacketRecord).ToArray(),
+            page,
+            pageSize,
+            (int)totalItems,
+            totalPages);
     }
 
     /// <inheritdoc />
@@ -366,17 +383,37 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<SessionRecord>> GetActiveSessionsAsync(int? port, CancellationToken cancellationToken)
+    public async Task<PagedResult<SessionRecord>> GetActiveSessionsAsync(OpsSessionListQuery query, CancellationToken cancellationToken)
     {
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+        int offset = (page - 1) * pageSize;
+
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var parameters = new { Port = query.Port, Offset = offset, PageSize = pageSize };
+
+        CommandDefinition countCommand = new(
+            GetSessionsCountSql(_context.Provider),
+            parameters,
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int totalItems = await connection.QuerySingleAsync<int>(countCommand);
+
         CommandDefinition command = new(
-            GetActiveSessionsSql(_context.Provider),
-            new { Port = port },
+            GetSessionsPageSql(_context.Provider),
+            parameters,
             commandTimeout: _context.CommandTimeoutSeconds,
             cancellationToken: cancellationToken);
 
         IEnumerable<SessionRow> rows = await connection.QueryAsync<SessionRow>(command);
-        return rows.Select(ToSessionRecord).ToArray();
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        return new PagedResult<SessionRecord>(
+            rows.Select(ToSessionRecord).ToArray(),
+            page,
+            pageSize,
+            totalItems,
+            totalPages);
     }
 
     /// <inheritdoc />
@@ -483,15 +520,85 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
     {
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         CommandDefinition command = new(
-            GetUserDevicesSql(_context.Provider),
+            GetUserDevicesAllSql(_context.Provider),
             new { UserId = userId },
             commandTimeout: _context.CommandTimeoutSeconds,
             cancellationToken: cancellationToken);
 
         IEnumerable<UserDeviceRow> rows = await connection.QueryAsync<UserDeviceRow>(command);
-        return rows
-            .Select(x => new UserDeviceBinding(x.DeviceId, x.Imei, x.BoundAtUtc, x.Alias))
-            .ToArray();
+        return rows.Select(x => new UserDeviceBinding(x.DeviceId, x.Imei, x.BoundAtUtc, x.Alias)).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<PagedResult<UserDeviceBinding>> GetUserDevicesPagedAsync(Guid userId, AdminDeviceListQuery query, CancellationToken cancellationToken)
+    {
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+        int offset = (page - 1) * pageSize;
+        string sortDirection = string.Equals(query.SortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
+
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var parameters = new { UserId = userId, Offset = offset, PageSize = pageSize };
+
+        CommandDefinition countCommand = new(
+            GetUserDevicesCountSql(_context.Provider),
+            parameters,
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int totalItems = await connection.QuerySingleAsync<int>(countCommand);
+
+        CommandDefinition command = new(
+            GetUserDevicesPageSql(
+                _context.Provider,
+                ResolveDeviceSortColumn(_context.Provider, query.SortBy.Trim()),
+                sortDirection),
+            parameters,
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<UserDeviceRow> rows = await connection.QueryAsync<UserDeviceRow>(command);
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        return new PagedResult<UserDeviceBinding>(
+            rows.Select(x => new UserDeviceBinding(x.DeviceId, x.Imei, x.BoundAtUtc, x.Alias)).ToArray(),
+            page,
+            pageSize,
+            totalItems,
+            totalPages);
+    }
+
+    /// <inheritdoc />
+    public async Task<PagedResult<UserDeviceBinding>> GetUserDevicesPagedMeAsync(Guid userId, MeDeviceListQuery query, CancellationToken cancellationToken)
+    {
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+        int offset = (page - 1) * pageSize;
+
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var parameters = new { UserId = userId, Offset = offset, PageSize = pageSize };
+
+        CommandDefinition countCommand = new(
+            GetUserDevicesCountSql(_context.Provider),
+            parameters,
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        int totalItems = await connection.QuerySingleAsync<int>(countCommand);
+
+        CommandDefinition command = new(
+            GetUserDevicesPagedMeSql(_context.Provider),
+            parameters,
+            commandTimeout: _context.CommandTimeoutSeconds,
+            cancellationToken: cancellationToken);
+
+        IEnumerable<UserDeviceRow> rows = await connection.QueryAsync<UserDeviceRow>(command);
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        return new PagedResult<UserDeviceBinding>(
+            rows.Select(x => new UserDeviceBinding(x.DeviceId, x.Imei, x.BoundAtUtc, x.Alias)).ToArray(),
+            page,
+            pageSize,
+            totalItems,
+            totalPages);
     }
 
     /// <inheritdoc />
@@ -1251,13 +1358,33 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
             """;
     }
 
-    private static string GetLatestRawPacketsSql(DatabaseProvider provider)
+    private static string GetRawPacketsCountSql(DatabaseProvider provider)
     {
         return provider switch
         {
             DatabaseProvider.SqlServer =>
                 """
-                SELECT TOP (@Limit)
+                SELECT COUNT_BIG(*)
+                FROM raw_packets
+                WHERE (@Imei IS NULL OR imei = @Imei);
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT COUNT(*)::BIGINT
+                FROM raw_packets
+                WHERE (@Imei IS NULL OR imei = @Imei);
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetRawPacketsPageSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
                     packet_id AS PacketId,
                     session_id AS SessionId,
                     port AS Port,
@@ -1275,7 +1402,8 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     ack_latency_ms AS AckLatencyMs
                 FROM raw_packets
                 WHERE (@Imei IS NULL OR imei = @Imei)
-                ORDER BY received_at_utc DESC;
+                ORDER BY received_at_utc DESC
+                OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
                 """,
             DatabaseProvider.Postgres =>
                 """
@@ -1298,7 +1426,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 FROM raw_packets
                 WHERE (@Imei IS NULL OR imei = @Imei)
                 ORDER BY received_at_utc DESC
-                LIMIT @Limit;
+                LIMIT @PageSize OFFSET @Offset;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
@@ -1418,6 +1546,78 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 WHERE is_active = TRUE
                   AND (@Port IS NULL OR port = @Port)
                 ORDER BY last_seen_at_utc DESC, session_id ASC;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetSessionsCountSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT COUNT(*)
+                FROM device_sessions
+                WHERE is_active = 1
+                  AND (@Port IS NULL OR port = @Port);
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT COUNT(*)::INT
+                FROM device_sessions
+                WHERE is_active = TRUE
+                  AND (@Port IS NULL OR port = @Port);
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetSessionsPageSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    session_id AS SessionId,
+                    remote_ip AS RemoteIp,
+                    port AS Port,
+                    connected_at_utc AS ConnectedAtUtc,
+                    last_seen_at_utc AS LastSeenAtUtc,
+                    last_heartbeat_at_utc AS LastHeartbeatAtUtc,
+                    imei AS Imei,
+                    frames_in AS FramesIn,
+                    frames_invalid AS FramesInvalid,
+                    close_reason AS CloseReason,
+                    disconnected_at_utc AS DisconnectedAtUtc,
+                    is_active AS IsActive
+                FROM device_sessions
+                WHERE is_active = 1
+                  AND (@Port IS NULL OR port = @Port)
+                ORDER BY last_seen_at_utc DESC
+                OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    session_id AS "SessionId",
+                    remote_ip AS "RemoteIp",
+                    port AS "Port",
+                    connected_at_utc AS "ConnectedAtUtc",
+                    last_seen_at_utc AS "LastSeenAtUtc",
+                    last_heartbeat_at_utc AS "LastHeartbeatAtUtc",
+                    imei AS "Imei",
+                    frames_in AS "FramesIn",
+                    frames_invalid AS "FramesInvalid",
+                    close_reason AS "CloseReason",
+                    disconnected_at_utc AS "DisconnectedAtUtc",
+                    is_active AS "IsActive"
+                FROM device_sessions
+                WHERE is_active = TRUE
+                  AND (@Port IS NULL OR port = @Port)
+                ORDER BY last_seen_at_utc DESC
+                LIMIT @PageSize OFFSET @Offset;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
@@ -1652,33 +1852,146 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         };
     }
 
-    private static string GetUserDevicesSql(DatabaseProvider provider)
+    private static string ResolveDeviceSortColumn(DatabaseProvider provider, string sortBy)
+    {
+        string normalized = sortBy.Trim().ToLowerInvariant();
+        return provider switch
+        {
+            DatabaseProvider.SqlServer => normalized switch
+            {
+                "imei" => "ud.imei",
+                "boundatutc" => "ud.bound_at_utc",
+                "alias" => "ISNULL(ud.alias, '')",
+                _ => "ud.bound_at_utc"
+            },
+            DatabaseProvider.Postgres => normalized switch
+            {
+                "imei" => "ud.imei",
+                "boundatutc" => "ud.bound_at_utc",
+                "alias" => "COALESCE(ud.alias, '')",
+                _ => "ud.bound_at_utc"
+            },
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUserDevicesAllSql(DatabaseProvider provider)
     {
         return provider switch
         {
             DatabaseProvider.SqlServer =>
                 """
                 SELECT
-                    device_id AS DeviceId,
-                    imei AS Imei,
-                    bound_at_utc AS BoundAtUtc,
-                    alias AS Alias
-                FROM user_devices
-                WHERE user_id = @UserId
-                  AND is_active = 1
-                ORDER BY bound_at_utc DESC, imei ASC;
+                    ud.device_id AS DeviceId,
+                    ud.imei AS Imei,
+                    ud.bound_at_utc AS BoundAtUtc,
+                    ud.alias AS Alias
+                FROM user_devices ud
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = 1
+                ORDER BY ud.bound_at_utc DESC, ud.imei ASC;
                 """,
             DatabaseProvider.Postgres =>
                 """
                 SELECT
-                    device_id AS "DeviceId",
-                    imei AS "Imei",
-                    bound_at_utc AS "BoundAtUtc",
-                    alias AS "Alias"
-                FROM user_devices
-                WHERE user_id = @UserId
-                  AND is_active = TRUE
-                ORDER BY bound_at_utc DESC, imei ASC;
+                    ud.device_id AS "DeviceId",
+                    ud.imei AS "Imei",
+                    ud.bound_at_utc AS "BoundAtUtc",
+                    ud.alias AS "Alias"
+                FROM user_devices ud
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = TRUE
+                ORDER BY ud.bound_at_utc DESC, ud.imei ASC;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUserDevicesCountSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT COUNT(*)
+                FROM user_devices ud
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = 1;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT COUNT(*)::INT
+                FROM user_devices ud
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = TRUE;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUserDevicesPageSql(DatabaseProvider provider, string orderByColumn, string sortDirection)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                $"""
+                SELECT
+                    ud.device_id AS DeviceId,
+                    ud.imei AS Imei,
+                    ud.bound_at_utc AS BoundAtUtc,
+                    ud.alias AS Alias
+                FROM user_devices ud
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = 1
+                ORDER BY {orderByColumn} {sortDirection}, ud.imei ASC
+                OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+                """,
+            DatabaseProvider.Postgres =>
+                $"""
+                SELECT
+                    ud.device_id AS "DeviceId",
+                    ud.imei AS "Imei",
+                    ud.bound_at_utc AS "BoundAtUtc",
+                    ud.alias AS "Alias"
+                FROM user_devices ud
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = TRUE
+                ORDER BY {orderByColumn} {sortDirection}, ud.imei ASC
+                LIMIT @PageSize OFFSET @Offset;
+                """,
+            _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
+        };
+    }
+
+    private static string GetUserDevicesPagedMeSql(DatabaseProvider provider)
+    {
+        return provider switch
+        {
+            DatabaseProvider.SqlServer =>
+                """
+                SELECT
+                    ud.device_id AS DeviceId,
+                    ud.imei AS Imei,
+                    ud.bound_at_utc AS BoundAtUtc,
+                    ud.alias AS Alias
+                FROM user_devices ud
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = 1
+                ORDER BY ud.bound_at_utc DESC, ud.imei ASC
+                OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+                """,
+            DatabaseProvider.Postgres =>
+                """
+                SELECT
+                    ud.device_id AS "DeviceId",
+                    ud.imei AS "Imei",
+                    ud.bound_at_utc AS "BoundAtUtc",
+                    ud.alias AS "Alias"
+                FROM user_devices ud
+                WHERE ud.user_id = @UserId
+                  AND ud.is_active = TRUE
+                ORDER BY ud.bound_at_utc DESC, ud.imei ASC
+                LIMIT @PageSize OFFSET @Offset;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };

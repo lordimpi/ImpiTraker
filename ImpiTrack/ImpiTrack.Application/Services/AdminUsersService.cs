@@ -48,7 +48,7 @@ public sealed class AdminUsersService : IAdminUsersService
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<UserDeviceBinding>?> GetUserDevicesAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task<PagedResult<UserDeviceBinding>?> GetUserDevicesAsync(Guid userId, AdminDeviceListQuery query, CancellationToken cancellationToken)
     {
         bool exists = await EnsureProvisionedAsync(userId, cancellationToken);
         if (!exists)
@@ -56,7 +56,7 @@ public sealed class AdminUsersService : IAdminUsersService
             return null;
         }
 
-        return await _userAccountRepository.GetUserDevicesAsync(userId, cancellationToken);
+        return await _userAccountRepository.GetUserDevicesPagedAsync(userId, query, cancellationToken);
     }
 
     /// <inheritdoc />

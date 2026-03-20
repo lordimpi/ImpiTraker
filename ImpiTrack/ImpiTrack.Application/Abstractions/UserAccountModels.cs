@@ -50,6 +50,27 @@ public sealed record AdminUserListQuery(
     string SortDirection);
 
 /// <summary>
+/// Parametros de consulta para listado paginado de dispositivos de un usuario.
+/// </summary>
+/// <param name="Page">Pagina solicitada (base 1).</param>
+/// <param name="PageSize">Tamano de pagina.</param>
+/// <param name="SortBy">Campo de ordenamiento.</param>
+/// <param name="SortDirection">Direccion del ordenamiento.</param>
+public sealed record AdminDeviceListQuery(
+    int Page,
+    int PageSize,
+    string SortBy,
+    string SortDirection);
+
+/// <summary>
+/// Parametros de consulta para listado paginado de dispositivos del usuario autenticado.
+/// Ordenamiento fijo: bound_at_utc DESC, imei ASC.
+/// </summary>
+/// <param name="Page">Pagina solicitada (base 1).</param>
+/// <param name="PageSize">Tamano de pagina (valores permitidos: 10, 20, 50, 100).</param>
+public sealed record MeDeviceListQuery(int Page, int PageSize);
+
+/// <summary>
 /// Vista administrativa de usuario para listado.
 /// </summary>
 /// <param name="UserId">Identificador del usuario.</param>

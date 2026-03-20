@@ -29,12 +29,31 @@ public interface IUserAccountRepository
     Task<UserAccountSummary?> GetUserSummaryAsync(Guid userId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Obtiene los GPS vinculados a un usuario.
+    /// Obtiene todos los GPS vinculados a un usuario sin paginacion.
     /// </summary>
     /// <param name="userId">Identificador del usuario.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
-    /// <returns>Lista de vinculos activos.</returns>
+    /// <returns>Lista plana de vinculos activos ordenados por fecha de vinculacion DESC, IMEI ASC.</returns>
     Task<IReadOnlyList<UserDeviceBinding>> GetUserDevicesAsync(Guid userId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene los GPS vinculados a un usuario de forma paginada.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="query">Consulta paginada con ordenamiento.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Resultado paginado de vinculos activos.</returns>
+    Task<PagedResult<UserDeviceBinding>> GetUserDevicesPagedAsync(Guid userId, AdminDeviceListQuery query, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Obtiene los GPS vinculados al usuario autenticado de forma paginada.
+    /// Ordenamiento fijo: bound_at_utc DESC, imei ASC.
+    /// </summary>
+    /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="query">Consulta paginada para el endpoint ME.</param>
+    /// <param name="cancellationToken">Token de cancelacion.</param>
+    /// <returns>Resultado paginado de vinculos activos.</returns>
+    Task<PagedResult<UserDeviceBinding>> GetUserDevicesPagedMeAsync(Guid userId, MeDeviceListQuery query, CancellationToken cancellationToken);
 
     /// <summary>
     /// Vincula un IMEI a la cuenta del usuario validando cuota y ownership.

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ImpiTrack.Application.Abstractions;
 using ImpiTrack.Ops;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.DataProtection;
@@ -108,11 +109,11 @@ public sealed class ApiRegistrationAndAccountTests
 
         HttpResponseMessage devicesResponse = await client.GetAsync("/api/me/devices");
         Assert.Equal(HttpStatusCode.OK, devicesResponse.StatusCode);
-        ApiEnvelope<List<UserDeviceResponse>>? devicesPayload = await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<List<UserDeviceResponse>>>();
+        ApiEnvelope<PagedResponse<UserDeviceResponse>>? devicesPayload = await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<PagedResponse<UserDeviceResponse>>>();
         Assert.NotNull(devicesPayload);
         Assert.True(devicesPayload!.Success);
         Assert.NotNull(devicesPayload.Data);
-        Assert.Contains(devicesPayload.Data!, x => x.Imei == "359586015829802");
+        Assert.Contains(devicesPayload.Data!.Items, x => x.Imei == "359586015829802");
     }
 
     [Fact]
@@ -181,11 +182,11 @@ public sealed class ApiRegistrationAndAccountTests
             $"/api/admin/users/{registerPayload.Data.Registration.UserId}/devices");
 
         Assert.Equal(HttpStatusCode.OK, devicesResponse.StatusCode);
-        ApiEnvelope<List<UserDeviceResponse>>? devicesPayload = await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<List<UserDeviceResponse>>>();
+        ApiEnvelope<PagedResult<UserDeviceResponse>>? devicesPayload = await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<PagedResult<UserDeviceResponse>>>();
         Assert.NotNull(devicesPayload);
         Assert.True(devicesPayload!.Success);
         Assert.NotNull(devicesPayload.Data);
-        Assert.Contains(devicesPayload.Data!, x => x.Imei == "111222333444555");
+        Assert.Contains(devicesPayload.Data!.Items, x => x.Imei == "111222333444555");
     }
 
     [Fact]
@@ -439,10 +440,10 @@ public sealed class ApiRegistrationAndAccountTests
 
         HttpResponseMessage devicesResponse = await client.GetAsync("/api/me/devices");
         Assert.Equal(HttpStatusCode.OK, devicesResponse.StatusCode);
-        ApiEnvelope<List<UserDeviceResponse>>? devicesPayload =
-            await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<List<UserDeviceResponse>>>();
+        ApiEnvelope<PagedResponse<UserDeviceResponse>>? devicesPayload =
+            await devicesResponse.Content.ReadFromJsonAsync<ApiEnvelope<PagedResponse<UserDeviceResponse>>>();
         Assert.NotNull(devicesPayload);
-        UserDeviceResponse device = Assert.Single(devicesPayload!.Data!);
+        UserDeviceResponse device = Assert.Single(devicesPayload!.Data!.Items);
         Assert.Equal("Truck #4", device.Alias);
     }
 

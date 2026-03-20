@@ -133,10 +133,19 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<RawPacketRecord>> GetLatestRawPacketsAsync(string? imei, int limit, CancellationToken cancellationToken)
+    public Task<PagedResult<RawPacketRecord>> GetLatestRawPacketsAsync(OpsRawListQuery query, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_store.GetLatestRawPackets(imei, limit));
+
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+
+        IReadOnlyList<RawPacketRecord> all = _store.GetLatestRawPackets(query.Imei, int.MaxValue);
+        int totalItems = all.Count;
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        RawPacketRecord[] items = all.Skip((page - 1) * pageSize).Take(pageSize).ToArray();
+
+        return Task.FromResult(new PagedResult<RawPacketRecord>(items, page, pageSize, totalItems, totalPages));
     }
 
     /// <inheritdoc />
@@ -160,10 +169,19 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<SessionRecord>> GetActiveSessionsAsync(int? port, CancellationToken cancellationToken)
+    public Task<PagedResult<SessionRecord>> GetActiveSessionsAsync(OpsSessionListQuery query, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_store.GetActiveSessions(port));
+
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+
+        IReadOnlyList<SessionRecord> all = _store.GetActiveSessions(query.Port);
+        int totalItems = all.Count;
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        SessionRecord[] items = all.Skip((page - 1) * pageSize).Take(pageSize).ToArray();
+
+        return Task.FromResult(new PagedResult<SessionRecord>(items, page, pageSize, totalItems, totalPages));
     }
 
     /// <inheritdoc />
@@ -228,11 +246,77 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
             return Task.FromResult<IReadOnlyList<UserDeviceBinding>>([]);
         }
 
-        IReadOnlyList<UserDeviceBinding> devices = account.Devices
-            .OrderBy(x => x.Imei, StringComparer.OrdinalIgnoreCase)
+        IReadOnlyList<UserDeviceBinding> items = account.Devices
+            .OrderByDescending(x => x.BoundAtUtc)
+            .ThenBy(x => x.Imei, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        return Task.FromResult(devices);
+        return Task.FromResult(items);
+    }
+
+    /// <inheritdoc />
+    public Task<PagedResult<UserDeviceBinding>> GetUserDevicesPagedAsync(Guid userId, AdminDeviceListQuery query, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+
+        if (!_accounts.TryGetValue(userId, out InMemoryUserAccount? account))
+        {
+            return Task.FromResult(new PagedResult<UserDeviceBinding>([], page, pageSize, 0, 0));
+        }
+
+        bool descending = string.Equals(query.SortDirection, "desc", StringComparison.OrdinalIgnoreCase);
+        string sortKey = query.SortBy.Trim().ToLowerInvariant();
+
+        IOrderedEnumerable<UserDeviceBinding> ordered = sortKey switch
+        {
+            "imei" => descending
+                ? account.Devices.OrderByDescending(x => x.Imei, StringComparer.OrdinalIgnoreCase)
+                : account.Devices.OrderBy(x => x.Imei, StringComparer.OrdinalIgnoreCase),
+            "alias" => descending
+                ? account.Devices.OrderByDescending(x => x.Alias ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                : account.Devices.OrderBy(x => x.Alias ?? string.Empty, StringComparer.OrdinalIgnoreCase),
+            _ => descending
+                ? account.Devices.OrderByDescending(x => x.BoundAtUtc)
+                : account.Devices.OrderBy(x => x.BoundAtUtc)
+        };
+
+        int totalItems = account.Devices.Count;
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        IReadOnlyList<UserDeviceBinding> items = ordered
+            .ThenBy(x => x.Imei, StringComparer.OrdinalIgnoreCase)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToArray();
+
+        return Task.FromResult(new PagedResult<UserDeviceBinding>(items, page, pageSize, totalItems, totalPages));
+    }
+
+    /// <inheritdoc />
+    public Task<PagedResult<UserDeviceBinding>> GetUserDevicesPagedMeAsync(Guid userId, MeDeviceListQuery query, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        int page = Math.Max(query.Page, 1);
+        int pageSize = Math.Clamp(query.PageSize, 1, 200);
+
+        if (!_accounts.TryGetValue(userId, out InMemoryUserAccount? account))
+        {
+            return Task.FromResult(new PagedResult<UserDeviceBinding>([], page, pageSize, 0, 0));
+        }
+
+        int totalItems = account.Devices.Count;
+        int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
+        IReadOnlyList<UserDeviceBinding> items = account.Devices
+            .OrderByDescending(x => x.BoundAtUtc)
+            .ThenBy(x => x.Imei, StringComparer.OrdinalIgnoreCase)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToArray();
+
+        return Task.FromResult(new PagedResult<UserDeviceBinding>(items, page, pageSize, totalItems, totalPages));
     }
 
     /// <inheritdoc />

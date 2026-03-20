@@ -29,12 +29,13 @@ public interface IAdminUsersService
     Task<UserAccountSummary?> GetUserSummaryAsync(Guid userId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Obtiene los dispositivos vinculados a un usuario.
+    /// Obtiene los dispositivos vinculados a un usuario de forma paginada.
     /// </summary>
     /// <param name="userId">Identificador del usuario.</param>
+    /// <param name="query">Consulta paginada con ordenamiento.</param>
     /// <param name="cancellationToken">Token de cancelacion.</param>
-    /// <returns>Lista de vinculos activos o <c>null</c> si el usuario no existe.</returns>
-    Task<IReadOnlyList<UserDeviceBinding>?> GetUserDevicesAsync(Guid userId, CancellationToken cancellationToken);
+    /// <returns>Resultado paginado de vinculos activos o <c>null</c> si el usuario no existe.</returns>
+    Task<PagedResult<UserDeviceBinding>?> GetUserDevicesAsync(Guid userId, AdminDeviceListQuery query, CancellationToken cancellationToken);
 
     /// <summary>
     /// Asigna plan activo a un usuario.
