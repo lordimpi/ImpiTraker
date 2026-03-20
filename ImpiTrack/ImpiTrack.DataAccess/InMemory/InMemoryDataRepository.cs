@@ -278,20 +278,29 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
         bool descending = string.Equals(query.SortDirection, "desc", StringComparison.OrdinalIgnoreCase);
         string sortKey = query.SortBy.Trim().ToLowerInvariant();
 
+        IEnumerable<UserDeviceBinding> filtered = account.Devices;
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            string s = query.Search.Trim().ToLowerInvariant();
+            filtered = filtered.Where(x =>
+                x.Imei.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                (x.Alias != null && x.Alias.Contains(s, StringComparison.OrdinalIgnoreCase)));
+        }
+
         IOrderedEnumerable<UserDeviceBinding> ordered = sortKey switch
         {
             "imei" => descending
-                ? account.Devices.OrderByDescending(x => x.Imei, StringComparer.OrdinalIgnoreCase)
-                : account.Devices.OrderBy(x => x.Imei, StringComparer.OrdinalIgnoreCase),
+                ? filtered.OrderByDescending(x => x.Imei, StringComparer.OrdinalIgnoreCase)
+                : filtered.OrderBy(x => x.Imei, StringComparer.OrdinalIgnoreCase),
             "alias" => descending
-                ? account.Devices.OrderByDescending(x => x.Alias ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                : account.Devices.OrderBy(x => x.Alias ?? string.Empty, StringComparer.OrdinalIgnoreCase),
+                ? filtered.OrderByDescending(x => x.Alias ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                : filtered.OrderBy(x => x.Alias ?? string.Empty, StringComparer.OrdinalIgnoreCase),
             _ => descending
-                ? account.Devices.OrderByDescending(x => x.BoundAtUtc)
-                : account.Devices.OrderBy(x => x.BoundAtUtc)
+                ? filtered.OrderByDescending(x => x.BoundAtUtc)
+                : filtered.OrderBy(x => x.BoundAtUtc)
         };
 
-        int totalItems = account.Devices.Count;
+        int totalItems = filtered.Count();
         int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
         IReadOnlyList<UserDeviceBinding> items = ordered
             .ThenBy(x => x.Imei, StringComparer.OrdinalIgnoreCase)
@@ -315,9 +324,18 @@ public sealed class InMemoryDataRepository : IOpsRepository, IIngestionRepositor
             return Task.FromResult(new PagedResult<UserDeviceBinding>([], page, pageSize, 0, 0));
         }
 
-        int totalItems = account.Devices.Count;
+        IEnumerable<UserDeviceBinding> meFiltered = account.Devices;
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            string s = query.Search.Trim().ToLowerInvariant();
+            meFiltered = meFiltered.Where(x =>
+                x.Imei.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                (x.Alias != null && x.Alias.Contains(s, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        int totalItems = meFiltered.Count();
         int totalPages = totalItems == 0 ? 0 : (int)Math.Ceiling(totalItems / (double)pageSize);
-        IReadOnlyList<UserDeviceBinding> items = account.Devices
+        IReadOnlyList<UserDeviceBinding> items = meFiltered
             .OrderByDescending(x => x.BoundAtUtc)
             .ThenBy(x => x.Imei, StringComparer.OrdinalIgnoreCase)
             .Skip((page - 1) * pageSize)

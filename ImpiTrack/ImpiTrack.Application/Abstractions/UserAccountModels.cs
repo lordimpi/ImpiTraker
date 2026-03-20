@@ -56,11 +56,13 @@ public sealed record AdminUserListQuery(
 /// <param name="PageSize">Tamano de pagina.</param>
 /// <param name="SortBy">Campo de ordenamiento.</param>
 /// <param name="SortDirection">Direccion del ordenamiento.</param>
+/// <param name="Search">Texto parcial para buscar por IMEI o alias.</param>
 public sealed record AdminDeviceListQuery(
     int Page,
     int PageSize,
     string SortBy,
-    string SortDirection);
+    string SortDirection,
+    string? Search = null);
 
 /// <summary>
 /// Parametros de consulta para listado paginado de dispositivos del usuario autenticado.
@@ -68,7 +70,8 @@ public sealed record AdminDeviceListQuery(
 /// </summary>
 /// <param name="Page">Pagina solicitada (base 1).</param>
 /// <param name="PageSize">Tamano de pagina (valores permitidos: 10, 20, 50, 100).</param>
-public sealed record MeDeviceListQuery(int Page, int PageSize);
+/// <param name="Search">Texto parcial para buscar por IMEI o alias.</param>
+public sealed record MeDeviceListQuery(int Page, int PageSize, string? Search = null);
 
 /// <summary>
 /// Vista administrativa de usuario para listado.

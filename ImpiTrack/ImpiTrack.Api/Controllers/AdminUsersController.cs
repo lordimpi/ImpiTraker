@@ -124,6 +124,7 @@ public sealed class AdminUsersController : ControllerBase
     /// <param name="userId">Identificador del usuario.</param>
     /// <param name="page">Pagina solicitada (base 1).</param>
     /// <param name="pageSize">Tamano de pagina.</param>
+    /// <param name="search">Texto parcial para filtrar por IMEI o alias.</param>
     /// <param name="sortBy">Campo de ordenamiento permitido.</param>
     /// <param name="sortDirection">Direccion de ordenamiento: asc o desc.</param>
     /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
@@ -136,6 +137,7 @@ public sealed class AdminUsersController : ControllerBase
         [FromRoute] Guid userId,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
+        [FromQuery] string? search = null,
         [FromQuery] string sortBy = "boundAtUtc",
         [FromQuery] string sortDirection = "desc",
         CancellationToken cancellationToken = default)
@@ -156,7 +158,7 @@ public sealed class AdminUsersController : ControllerBase
                 "La direccion de ordenamiento solicitada no es valida.");
         }
 
-        var query = new AdminDeviceListQuery(page, pageSize, sortBy, sortDirection);
+        var query = new AdminDeviceListQuery(page, pageSize, sortBy, sortDirection, search);
         PagedResult<UserDeviceBinding>? devices = await _adminUsersService.GetUserDevicesAsync(userId, query, cancellationToken);
 
         if (devices is null)

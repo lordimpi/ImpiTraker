@@ -65,6 +65,7 @@ public sealed class MeController : ControllerBase
     /// </summary>
     /// <param name="page">Numero de pagina (base 1).</param>
     /// <param name="pageSize">Tamano de pagina (10, 20, 50 o 100).</param>
+    /// <param name="search">Texto parcial para filtrar por IMEI o alias.</param>
     /// <param name="cancellationToken">Token de cancelacion de la solicitud.</param>
     /// <returns>Resultado paginado de dispositivos vinculados.</returns>
     [HttpGet("devices")]
@@ -74,6 +75,7 @@ public sealed class MeController : ControllerBase
     public async Task<ActionResult<ApiResponse<PagedResult<UserDeviceBinding>>>> GetDevices(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 20,
+        [FromQuery] string? search = null,
         CancellationToken cancellationToken = default)
     {
         if (!TryGetCurrentUserId(out Guid userId))
@@ -94,7 +96,7 @@ public sealed class MeController : ControllerBase
 
         PagedResult<UserDeviceBinding>? result = await _meAccountService.GetDevicesPagedAsync(
             userId,
-            new MeDeviceListQuery(page, pageSize),
+            new MeDeviceListQuery(page, pageSize, search),
             cancellationToken);
 
         if (result is null)

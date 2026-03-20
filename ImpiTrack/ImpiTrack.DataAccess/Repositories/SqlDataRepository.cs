@@ -547,7 +547,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         string sortDirection = string.Equals(query.SortDirection, "desc", StringComparison.OrdinalIgnoreCase) ? "DESC" : "ASC";
 
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        var parameters = new { UserId = userId, Offset = offset, PageSize = pageSize };
+        var parameters = new { UserId = userId, Offset = offset, PageSize = pageSize, Search = string.IsNullOrWhiteSpace(query.Search) ? null : query.Search.Trim() };
 
         CommandDefinition countCommand = new(
             GetUserDevicesCountSql(_context.Provider),
@@ -584,7 +584,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
         int offset = (page - 1) * pageSize;
 
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        var parameters = new { UserId = userId, Offset = offset, PageSize = pageSize };
+        var parameters = new { UserId = userId, Offset = offset, PageSize = pageSize, Search = string.IsNullOrWhiteSpace(query.Search) ? null : query.Search.Trim() };
 
         CommandDefinition countCommand = new(
             GetUserDevicesCountSql(_context.Provider),
@@ -1940,14 +1940,16 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 SELECT COUNT(*)
                 FROM user_devices ud
                 WHERE ud.user_id = @UserId
-                  AND ud.is_active = 1;
+                  AND ud.is_active = 1
+                  AND (@Search IS NULL OR ud.imei LIKE '%' + @Search + '%' OR ud.alias LIKE '%' + @Search + '%');
                 """,
             DatabaseProvider.Postgres =>
                 """
                 SELECT COUNT(*)::INT
                 FROM user_devices ud
                 WHERE ud.user_id = @UserId
-                  AND ud.is_active = TRUE;
+                  AND ud.is_active = TRUE
+                  AND (@Search IS NULL OR ud.imei ILIKE '%' || @Search || '%' OR ud.alias ILIKE '%' || @Search || '%');
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_query")
         };
@@ -1967,6 +1969,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 FROM user_devices ud
                 WHERE ud.user_id = @UserId
                   AND ud.is_active = 1
+                  AND (@Search IS NULL OR ud.imei LIKE '%' + @Search + '%' OR ud.alias LIKE '%' + @Search + '%')
                 ORDER BY {orderByColumn} {sortDirection}, ud.imei ASC
                 OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
                 """,
@@ -1980,6 +1983,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 FROM user_devices ud
                 WHERE ud.user_id = @UserId
                   AND ud.is_active = TRUE
+                  AND (@Search IS NULL OR ud.imei ILIKE '%' || @Search || '%' OR ud.alias ILIKE '%' || @Search || '%')
                 ORDER BY {orderByColumn} {sortDirection}, ud.imei ASC
                 LIMIT @PageSize OFFSET @Offset;
                 """,
@@ -2001,6 +2005,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 FROM user_devices ud
                 WHERE ud.user_id = @UserId
                   AND ud.is_active = 1
+                  AND (@Search IS NULL OR ud.imei LIKE '%' + @Search + '%' OR ud.alias LIKE '%' + @Search + '%')
                 ORDER BY ud.bound_at_utc DESC, ud.imei ASC
                 OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
                 """,
@@ -2014,6 +2019,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                 FROM user_devices ud
                 WHERE ud.user_id = @UserId
                   AND ud.is_active = TRUE
+                  AND (@Search IS NULL OR ud.imei ILIKE '%' || @Search || '%' OR ud.alias ILIKE '%' || @Search || '%')
                 ORDER BY ud.bound_at_utc DESC, ud.imei ASC
                 LIMIT @PageSize OFFSET @Offset;
                 """,
