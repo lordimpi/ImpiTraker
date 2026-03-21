@@ -271,7 +271,7 @@ try {
     for ($attempt = 1; $attempt -le 2 -and [string]::IsNullOrWhiteSpace($telemetryMessage); $attempt++) {
         $telemetryJob = Start-TopicSubscriberJob -Topic "v1/telemetry/+" -Port $EmqxPort -TimeoutSeconds $TopicTimeoutSeconds
         Wait-SubscriberReady -Port $EmqxPort
-        & $sendPayloadScript -ServerHost $TcpHost -Port $TcpPort -Payload "imei:359586015829802,tracker,250301123045,,A;" | Out-Null
+        & $sendPayloadScript -ServerHost $TcpHost -Port $TcpPort -Payload "imei:359586015829802,tracker,260301073045,100%,A,123045.00,A,0430.0000,N,07430.0000,W;" | Out-Null
         try {
             $telemetryMessage = Receive-TopicMessage -Job $telemetryJob -TimeoutSeconds $TopicTimeoutSeconds -Topic "v1/telemetry/+"
         }
