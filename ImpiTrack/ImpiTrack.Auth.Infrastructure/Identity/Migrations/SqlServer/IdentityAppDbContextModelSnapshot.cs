@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
 
-namespace ImpiTrack.Auth.Infrastructure.Identity.Migrations
+namespace ImpiTrack.Auth.Infrastructure.Identity.Migrations.SqlServer
 {
     [DbContext(typeof(IdentityAppDbContext))]
     partial class IdentityAppDbContextModelSnapshot : ModelSnapshot

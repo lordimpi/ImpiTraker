@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS plans
 (
     plan_id UUID PRIMARY KEY,
-    code VARCHAR(32) NOT NULL,
+    code VARCHAR(32) NOT NULL UNIQUE,
     name VARCHAR(64) NOT NULL,
     max_gps INTEGER NOT NULL,
     is_active BOOLEAN NOT NULL,

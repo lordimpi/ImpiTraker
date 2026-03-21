@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
 
-namespace ImpiTrack.Auth.Infrastructure.Identity.Migrations
+namespace ImpiTrack.Auth.Infrastructure.Identity.Migrations.SqlServer
 {
     [DbContext(typeof(IdentityAppDbContext))]
     [Migration("20260301172026_InitialIdentity")]
