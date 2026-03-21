@@ -159,6 +159,7 @@ builder.Services.AddDbContext<IdentityAppDbContext>(options =>
         options.UseSqlServer(identityConnection, sql =>
         {
             sql.CommandTimeout(Math.Max(1, database.CommandTimeoutSeconds));
+            sql.MigrationsAssembly("ImpiTrack.Auth.Infrastructure");
         });
 
         return;
@@ -364,18 +365,17 @@ builder.Services.AddAuthorization(options =>
 
 WebApplication app = builder.Build();
 
-if (app.Environment.IsDevelopment() && (useIdentitySqlServer || useIdentityPostgres))
+if (useIdentitySqlServer)
 {
     using IServiceScope migrationScope = app.Services.CreateScope();
     IdentityAppDbContext dbContext = migrationScope.ServiceProvider.GetRequiredService<IdentityAppDbContext>();
-    if (useIdentitySqlServer)
-    {
-        await dbContext.Database.MigrateAsync();
-    }
-    else
-    {
-        await dbContext.Database.EnsureCreatedAsync();
-    }
+    await dbContext.Database.MigrateAsync();
+}
+else if (useIdentityPostgres)
+{
+    using IServiceScope migrationScope = app.Services.CreateScope();
+    IdentityAppDbContext dbContext = migrationScope.ServiceProvider.GetRequiredService<IdentityAppDbContext>();
+    await dbContext.Database.EnsureCreatedAsync();
 }
 
 using (IServiceScope dataAccessMigrationScope = app.Services.CreateScope())

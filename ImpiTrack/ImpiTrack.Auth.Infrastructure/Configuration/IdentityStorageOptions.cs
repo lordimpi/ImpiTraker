@@ -13,8 +13,7 @@ public sealed class IdentityStorageOptions
     public const string SectionName = "IdentityStorage";
 
     /// <summary>
-    /// Proveedor de Identity. Valores validos: SqlServer o InMemory.
-    /// Postgres no esta soportado en net10 estable para Identity.
+    /// Proveedor de Identity. Valores validos: SqlServer, Postgres o InMemory.
     /// </summary>
     [Required]
     public string Provider { get; set; } = "InMemory";

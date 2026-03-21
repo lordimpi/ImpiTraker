@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace ImpiTrack.Auth.Infrastructure.Identity.Migrations
+namespace ImpiTrack.Auth.Infrastructure.Identity.Migrations.SqlServer
 {
     /// <inheritdoc />
     public partial class InitialIdentity : Migration
