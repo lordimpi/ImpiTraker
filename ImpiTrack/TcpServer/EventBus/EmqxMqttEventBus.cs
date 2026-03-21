@@ -2,6 +2,7 @@ using System.Text.Json;
 using ImpiTrack.Shared.Options;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.EventBus;
+using Microsoft.Extensions.Hosting;
 using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Protocol;
@@ -11,7 +12,7 @@ namespace TcpServer.EventBus;
 /// <summary>
 /// Implementacion de <see cref="IEventBus"/> usando EMQX via MQTTnet.
 /// </summary>
-public sealed class EmqxMqttEventBus : IEventBus, IAsyncDisposable
+public sealed class EmqxMqttEventBus : IEventBus, IHostedService, IAsyncDisposable
 {
     private readonly ILogger<EmqxMqttEventBus> _logger;
     private readonly EventBusOptions _options;
@@ -57,6 +58,15 @@ public sealed class EmqxMqttEventBus : IEventBus, IAsyncDisposable
 
         _mqttOptions = builder.Build();
     }
+
+    /// <inheritdoc />
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await EnsureConnectedAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <inheritdoc />
     public async Task PublishAsync<TPayload>(string topic, TPayload payload, CancellationToken cancellationToken)
