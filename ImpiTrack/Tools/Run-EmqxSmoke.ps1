@@ -112,6 +112,49 @@ function Start-TopicSubscriberJob {
     } -ArgumentList $Topic, $Port, $TimeoutSeconds, $isLinuxPlatform
 }
 
+function Wait-SubscriberReady {
+    param(
+        [Parameter(Mandatory = $true)][int]$Port,
+        [Parameter(Mandatory = $false)][int]$TimeoutSeconds = 15,
+        [Parameter(Mandatory = $false)][int]$PostReadyMs = 400
+    )
+
+    # Publishes a probe to a unique topic and waits for a separate subscriber to receive it.
+    # This confirms Docker→EMQX networking is functional before sending real payloads.
+    $probeTopic = "v1/smoke/ready/$([System.Guid]::NewGuid().ToString('N'))"
+
+    $subDockerArgs = @("run", "--rm")
+    if ($isLinuxPlatform) { $subDockerArgs += "--add-host=host.docker.internal:host-gateway" }
+    $subDockerArgs += @(
+        "eclipse-mosquitto:2", "sh", "-lc",
+        "mosquitto_sub -h host.docker.internal -p $Port -t '$probeTopic' -C 1 -W $TimeoutSeconds")
+
+    $probeSubJob = Start-Job -ScriptBlock {
+        param($DockerArgs)
+        & docker @DockerArgs
+    } -ArgumentList (,$subDockerArgs)
+
+    Start-Sleep -Milliseconds 500
+
+    $pubDockerArgs = @("run", "--rm")
+    if ($isLinuxPlatform) { $pubDockerArgs += "--add-host=host.docker.internal:host-gateway" }
+    $pubDockerArgs += @(
+        "eclipse-mosquitto:2", "sh", "-lc",
+        "mosquitto_pub -h host.docker.internal -p $Port -t '$probeTopic' -m 'ready' -q 1")
+    docker @pubDockerArgs | Out-Null
+
+    $completed = Wait-Job -Job $probeSubJob -Timeout ($TimeoutSeconds + 5)
+    Remove-Job -Job $probeSubJob -Force -ErrorAction SilentlyContinue
+
+    if ($null -eq $completed) {
+        throw "smoke_subscriber_ready_timeout port=$Port topic=$probeTopic"
+    }
+
+    if ($PostReadyMs -gt 0) {
+        Start-Sleep -Milliseconds $PostReadyMs
+    }
+}
+
 function Receive-TopicMessage {
     param(
         [Parameter(Mandatory = $true)][System.Management.Automation.Job]$Job,
@@ -219,7 +262,7 @@ try {
     Write-Host "Smoke EMQX: listener TCP listo en ${TcpHost}:$TcpPort"
 
     $dlqJob = Start-TopicSubscriberJob -Topic "v1/dlq/#" -Port $EmqxPort -TimeoutSeconds $TopicTimeoutSeconds
-    Start-Sleep -Milliseconds 900
+    Wait-SubscriberReady -Port $EmqxPort
     & $sendPayloadScript -ServerHost $TcpHost -Port $TcpPort -Payload "##,imei:359586015829802,A;" | Out-Null
     $dlqMessage = Receive-TopicMessage -Job $dlqJob -TimeoutSeconds $TopicTimeoutSeconds -Topic "v1/dlq/#"
     Write-Host "[OK] DLQ detectado: $dlqMessage"
@@ -227,7 +270,7 @@ try {
     $telemetryMessage = $null
     for ($attempt = 1; $attempt -le 2 -and [string]::IsNullOrWhiteSpace($telemetryMessage); $attempt++) {
         $telemetryJob = Start-TopicSubscriberJob -Topic "v1/telemetry/+" -Port $EmqxPort -TimeoutSeconds $TopicTimeoutSeconds
-        Start-Sleep -Milliseconds 900
+        Wait-SubscriberReady -Port $EmqxPort
         & $sendPayloadScript -ServerHost $TcpHost -Port $TcpPort -Payload "imei:359586015829802,tracker,250301123045,,A;" | Out-Null
         try {
             $telemetryMessage = Receive-TopicMessage -Job $telemetryJob -TimeoutSeconds $TopicTimeoutSeconds -Topic "v1/telemetry/+"
@@ -244,7 +287,7 @@ try {
     $statusMessage = $null
     for ($attempt = 1; $attempt -le 2 -and [string]::IsNullOrWhiteSpace($statusMessage); $attempt++) {
         $statusJob = Start-TopicSubscriberJob -Topic "v1/status/+" -Port $EmqxPort -TimeoutSeconds $TopicTimeoutSeconds
-        Start-Sleep -Milliseconds 900
+        Wait-SubscriberReady -Port $EmqxPort
         & $sendPayloadScript -ServerHost $TcpHost -Port $TcpPort -Payload "##,imei:359586015829802,A;" | Out-Null
         try {
             $statusMessage = Receive-TopicMessage -Job $statusJob -TimeoutSeconds $TopicTimeoutSeconds -Topic "v1/status/+"
