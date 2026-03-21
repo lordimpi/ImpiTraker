@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ImpiTrackDB
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "80:8080"
+      - "5001:5001"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=ImpiTrackDB;Username=postgres;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__IdentityPostgres: "Host=postgres;Port=5432;Database=ImpiTrackDB;Username=postgres;Password=${POSTGRES_PASSWORD}"
+      Database__Provider: Postgres
+      Database__EnableAutoMigrate: "true"
+      Database__CommandTimeoutSeconds: "30"
+      IdentityStorage__Provider: Postgres
+      IdentityBootstrap__SeedAdminOnStart: "true"
+      IdentityBootstrap__AdminPassword: "${ADMIN_PASSWORD}"
+      Jwt__SigningKey: "${JWT_SIGNING_KEY}"
+      Jwt__Issuer: ImpiTrack
+      Jwt__Audience: ImpiTrack.Api
+      Cors__AllowedOrigins__0: "${CORS_ORIGIN:-http://localhost:4200}"
+    depends_on:
+      - postgres
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
