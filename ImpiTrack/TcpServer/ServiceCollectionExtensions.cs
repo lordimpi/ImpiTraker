@@ -109,16 +109,19 @@ public static class ServiceCollectionExtensions
             return new InMemoryRawPacketQueue(options.Pipeline.RawChannelCapacity, fullMode);
         });
 
-        services.AddSingleton<IEventBus>(sp =>
+        string eventBusProvider = configuration["EventBus:Provider"] ?? string.Empty;
+        if (string.Equals(eventBusProvider, "Emqx", StringComparison.OrdinalIgnoreCase))
         {
-            EventBusOptions eventBusOptions = sp.GetRequiredService<IGenericOptionsService<EventBusOptions>>().GetOptions();
-            if (string.Equals(eventBusOptions.Provider, "Emqx", StringComparison.OrdinalIgnoreCase))
-            {
-                return ActivatorUtilities.CreateInstance<EmqxMqttEventBus>(sp);
-            }
-
-            return new InMemoryEventBus();
-        });
+            services.AddSingleton<EmqxMqttEventBus>();
+            services.AddSingleton<IEventBus>(sp => sp.GetRequiredService<EmqxMqttEventBus>());
+            // Register as IHostedService BEFORE Worker so EMQX connects eagerly at startup,
+            // guaranteeing the connection is established before any TCP packet is processed.
+            services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<EmqxMqttEventBus>());
+        }
+        else
+        {
+            services.AddSingleton<IEventBus, InMemoryEventBus>();
+        }
 
         services.AddSingleton<IProtocolParser, CobanProtocolParser>();
         services.AddSingleton<IProtocolParser, CantrackProtocolParser>();

@@ -7,6 +7,12 @@
     <UserSecretsId>dotnet-TcpServer-9b22ac38-01c2-4e1c-9099-9d035049ee4a</UserSecretsId>
   </PropertyGroup>
 
+  <!-- Standalone host mode: activated via /p:StandaloneHost=true for smoke tests and local debugging. -->
+  <PropertyGroup Condition="'$(StandaloneHost)' == 'true'">
+    <OutputType>Exe</OutputType>
+    <DefineConstants>$(DefineConstants);STANDALONE_HOST</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <Using Include="Microsoft.Extensions.Configuration" />
     <Using Include="Microsoft.Extensions.DependencyInjection" />
