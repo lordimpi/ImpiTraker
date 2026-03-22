@@ -1344,7 +1344,7 @@ public sealed class SqlDataRepository : IOpsRepository, IIngestionRepository, IU
                     @PositionId, @PacketId, @SessionId, @DeviceId, @Imei, @Protocol, @MessageType,
                     @GpsTimeUtc, @Latitude, @Longitude, @SpeedKmh, @HeadingDeg, @CreatedAtUtc, @DedupeKey
                 )
-                ON CONFLICT (dedupe_key) DO NOTHING;
+                ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING;
                 """,
             _ => throw new InvalidOperationException("database_provider_not_supported_for_insert")
         };
