@@ -16,7 +16,7 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
     private const int MaxPositionsLimit = 500;
     private const int MaxEventsLimit = 100;
     private const int MaxTripsLimit = 200;
-    private const int MaxTripCandidatePoints = 5000;
+    private const int MaxTripCandidatePoints = 50000;
     private static readonly TimeSpan TripGapThreshold = TimeSpan.FromMinutes(10);
 
     /// <summary>Umbral de velocidad para detectar movimiento. Elegido en 12 km/h para filtrar deriva GPS en vehiculos detenidos.</summary>
@@ -323,8 +323,8 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
 
             if (current is null)
             {
-                // Abrir viaje: ACC_ON es señal primaria, movimiento 2D/velocidad es secundario.
-                bool shouldOpen = isAccOn || (!hasAccData && isMoving);
+                // Abrir viaje: ACC_ON o movimiento real (velocidad/2D). ACC es enriquecimiento, no requisito.
+                bool shouldOpen = isAccOn || isMoving;
                 if (shouldOpen)
                 {
                     current = [];
@@ -366,7 +366,7 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
                 AddTripIfValid(trips, imei, current, nowUtc);
 
                 // Abrir nuevo viaje inmediatamente si hay movimiento o ACC_ON en el punto actual.
-                bool shouldOpenNext = isAccOn || (!hasAccData && isMoving);
+                bool shouldOpenNext = isAccOn || isMoving;
                 current = shouldOpenNext
                     ? previous is not null ? [previous, point] : [point]
                     : null;
