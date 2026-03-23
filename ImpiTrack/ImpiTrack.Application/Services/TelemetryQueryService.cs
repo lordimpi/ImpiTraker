@@ -16,7 +16,7 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
     private const int MaxPositionsLimit = 500;
     private const int MaxEventsLimit = 100;
     private const int MaxTripsLimit = 200;
-    private const int MaxTripCandidatePoints = 5000;
+    private const int MaxTripCandidatePoints = 50000;
     private static readonly TimeSpan TripGapThreshold = TimeSpan.FromMinutes(10);
 
     /// <summary>Umbral de velocidad para detectar movimiento. Elegido en 12 km/h para filtrar deriva GPS en vehiculos detenidos.</summary>
