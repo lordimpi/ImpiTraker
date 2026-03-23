@@ -323,8 +323,8 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
 
             if (current is null)
             {
-                // Abrir viaje: ACC_ON es señal primaria, movimiento 2D/velocidad es secundario.
-                bool shouldOpen = isAccOn || (!hasAccData && isMoving);
+                // Abrir viaje: ACC_ON o movimiento real (velocidad/2D). ACC es enriquecimiento, no requisito.
+                bool shouldOpen = isAccOn || isMoving;
                 if (shouldOpen)
                 {
                     current = [];
@@ -366,7 +366,7 @@ public sealed class TelemetryQueryService : ITelemetryQueryService
                 AddTripIfValid(trips, imei, current, nowUtc);
 
                 // Abrir nuevo viaje inmediatamente si hay movimiento o ACC_ON en el punto actual.
-                bool shouldOpenNext = isAccOn || (!hasAccData && isMoving);
+                bool shouldOpenNext = isAccOn || isMoving;
                 current = shouldOpenNext
                     ? previous is not null ? [previous, point] : [point]
                     : null;
