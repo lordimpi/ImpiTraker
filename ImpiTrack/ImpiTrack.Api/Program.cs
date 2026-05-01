@@ -17,13 +17,16 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OpenTelemetry.Metrics;
 using Scalar.AspNetCore;
 using Serilog;
+using System.Security.Claims;
 using System.Text;
+using System.Threading.RateLimiting;
 using TcpServer;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -99,6 +102,26 @@ builder.Services.AddSignalR();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IDeviceOwnershipResolver, CachedDeviceOwnershipResolver>();
 builder.Services.AddSingleton<ITelemetryNotifier, SignalRTelemetryNotifier>();
+builder.Services.AddSingleton<IDeviceCommandNotifier, SignalRDeviceCommandNotifier>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("device-commands", httpContext =>
+    {
+        string userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? httpContext.User.FindFirstValue("sub")
+            ?? "anon";
+
+        return RateLimitPartition.GetFixedWindowLimiter(userId, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst
+        });
+    });
+
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.Configure<ApiBehaviorOptions>(options =>
@@ -473,8 +496,10 @@ app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.MapControllers();
 app.MapHub<TelemetryHub>("/hubs/telemetry");
+app.MapHub<DeviceCommandHub>("/hubs/device-commands");
 
 app.MapGet("/", () => Results.Redirect("/scalar/v1"))
    .ExcludeFromDescription();

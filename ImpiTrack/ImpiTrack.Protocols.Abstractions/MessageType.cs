@@ -28,5 +28,10 @@ public enum MessageType
     /// <summary>
     /// Paquete de estado o alarma.
     /// </summary>
-    Status = 4
+    Status = 4,
+
+    /// <summary>
+    /// Respuesta de ACK del dispositivo a un comando saliente previamente enviado.
+    /// </summary>
+    CommandAck = 5
 }

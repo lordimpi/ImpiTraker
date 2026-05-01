@@ -9,6 +9,10 @@ namespace ImpiTrack.Tcp.Core.Sessions;
 public sealed class InMemorySessionManager : ISessionManager
 {
     private readonly ConcurrentDictionary<Guid, SessionState> _sessions = new();
+    private readonly ConcurrentDictionary<string, Guid> _imeiIndex = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
+    public event Action<SessionState>? ImeiAttached;
 
     /// <inheritdoc />
     public SessionState Open(string remoteIp, int port)
@@ -46,9 +50,21 @@ public sealed class InMemorySessionManager : ISessionManager
             return;
         }
 
-        if (_sessions.TryGetValue(sessionId.Value, out SessionState? session))
+        if (!_sessions.TryGetValue(sessionId.Value, out SessionState? session))
         {
-            session.Imei = imei;
+            return;
+        }
+
+        session.Imei = imei;
+        _imeiIndex[imei] = sessionId.Value;
+
+        try
+        {
+            ImeiAttached?.Invoke(session);
+        }
+        catch
+        {
+            // Best-effort: never let a buggy subscriber kill AttachImei.
         }
     }
 
@@ -102,7 +118,38 @@ public sealed class InMemorySessionManager : ISessionManager
             return false;
         }
 
+        session.OutboundChannel.Writer.TryComplete();
+
+        if (session.Imei is not null)
+        {
+            _imeiIndex.TryRemove(session.Imei, out _);
+        }
+
         session.DisconnectedAtUtc = DateTimeOffset.UtcNow;
         return true;
+    }
+
+    /// <inheritdoc />
+    public bool TryGetByImei(string imei, out SessionState? session)
+    {
+        session = null;
+        return _imeiIndex.TryGetValue(imei, out Guid id)
+            && _sessions.TryGetValue(id, out session);
+    }
+
+    /// <inheritdoc />
+    public bool TryEnqueueCommand(string imei, OutboundFrame frame)
+    {
+        if (!TryGetByImei(imei, out SessionState? session) || session is null)
+        {
+            return false;
+        }
+
+        if (session.DisconnectedAtUtc is not null || !session.IsCommandable)
+        {
+            return false;
+        }
+
+        return session.OutboundChannel.Writer.TryWrite(frame);
     }
 }

@@ -8,6 +8,7 @@ using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.EventBus;
 using ImpiTrack.Tcp.Core.Queue;
+using ImpiTrack.Tcp.Core.Sessions;
 
 namespace TcpServer;
 
@@ -31,6 +32,8 @@ public sealed class InboundProcessingService : BackgroundService
     private readonly IEventBus _eventBus;
     private readonly ITelemetryNotifier _telemetryNotifier;
     private readonly IDevicePresenceTracker _presenceTracker;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ISessionManager _sessionManager;
     private readonly EventBusOptions _eventBusOptions;
     private readonly int _workerCount;
     private readonly ConcurrentDictionary<string, byte> _simulatedFailureOnceTracker = new(StringComparer.OrdinalIgnoreCase);
@@ -46,6 +49,8 @@ public sealed class InboundProcessingService : BackgroundService
     /// <param name="eventBus">Bus de eventos interno para contratos canonicos.</param>
     /// <param name="telemetryNotifier">Notificador de telemetria en tiempo real (SignalR o no-op).</param>
     /// <param name="presenceTracker">Tracker de presencia online/offline de dispositivos.</param>
+    /// <param name="scopeFactory">Factoria de scopes para resolver servicios con lifetime Scoped (IDeviceCommandService).</param>
+    /// <param name="sessionManager">Administrador de sesiones TCP activas para resolver el IMEI cuando el ACK no lo incluye.</param>
     /// <param name="optionsService">Opciones del servidor.</param>
     /// <param name="eventBusOptionsService">Opciones del bus de eventos.</param>
     public InboundProcessingService(
@@ -56,6 +61,8 @@ public sealed class InboundProcessingService : BackgroundService
         IEventBus eventBus,
         ITelemetryNotifier telemetryNotifier,
         IDevicePresenceTracker presenceTracker,
+        IServiceScopeFactory scopeFactory,
+        ISessionManager sessionManager,
         IGenericOptionsService<TcpServerOptions> optionsService,
         IGenericOptionsService<EventBusOptions> eventBusOptionsService)
     {
@@ -66,6 +73,8 @@ public sealed class InboundProcessingService : BackgroundService
         _eventBus = eventBus;
         _telemetryNotifier = telemetryNotifier;
         _presenceTracker = presenceTracker;
+        _scopeFactory = scopeFactory;
+        _sessionManager = sessionManager;
         TcpServerOptions tcpOptions = optionsService.GetOptions();
         _workerCount = Math.Max(1, tcpOptions.Pipeline.ConsumerWorkers);
 
@@ -130,6 +139,13 @@ public sealed class InboundProcessingService : BackgroundService
                     _inboundQueue.Backlog,
                     persistLatencyMs,
                     persistResult.Status);
+
+                // Additive CommandAck routing: runs regardless of persist status so late/out-of-band
+                // ACKs from devices with positions (Coban pseudo-text trick) are always correlated.
+                if (envelope.Message.MessageType == MessageType.CommandAck)
+                {
+                    await HandleCommandAckAsync(envelope, cancellationToken);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -139,6 +155,83 @@ public sealed class InboundProcessingService : BackgroundService
             {
                 _logger.LogError(ex, "queue_consume_error worker={workerNumber}", workerNumber);
             }
+        }
+    }
+
+    /// <summary>
+    /// Enruta un CommandAck al servicio de comandos para correlacion y actualizacion de estado.
+    /// Usa IServiceScopeFactory porque IDeviceCommandService tiene lifetime Scoped.
+    /// Nunca lanza excepciones — los errores se loguean y se descartan para no interrumpir el pipeline.
+    /// </summary>
+    private async Task HandleCommandAckAsync(InboundEnvelope envelope, CancellationToken cancellationToken)
+    {
+        ParsedMessage msg = envelope.Message;
+
+        // Cantrack plaintext ACKs ("stop engine succeed" / "resume engine succeed") do not carry an
+        // IMEI in the frame body. Fall back to the session's registered IMEI.
+        string? imei = msg.Imei;
+        if (string.IsNullOrWhiteSpace(imei))
+        {
+            _sessionManager.TryGet(envelope.SessionId, out SessionState? session);
+            imei = session?.Imei;
+        }
+
+        if (string.IsNullOrWhiteSpace(imei))
+        {
+            _logger.LogWarning(
+                "command_ack_no_imei sessionId={sessionId} protocol={protocol} responseCode={responseCode} — ACK descartado",
+                envelope.SessionId,
+                msg.Protocol,
+                msg.ResponseCode ?? "n/a");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(msg.ResponseCode))
+        {
+            _logger.LogWarning(
+                "command_ack_no_response_code sessionId={sessionId} imei={imei} protocol={protocol} — ACK descartado",
+                envelope.SessionId,
+                imei,
+                msg.Protocol);
+            return;
+        }
+
+        _logger.LogInformation(
+            "command_ack_received imei={imei} protocol={protocol} responseCode={responseCode} correlationKey={correlationKey} correlationTimestamp={correlationTimestamp}",
+            imei,
+            msg.Protocol,
+            msg.ResponseCode,
+            msg.CorrelationKey ?? "n/a",
+            msg.CorrelationTimestamp ?? "n/a");
+
+        try
+        {
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            IDeviceCommandService commandService =
+                scope.ServiceProvider.GetRequiredService<IDeviceCommandService>();
+
+            await commandService.HandleAckAsync(
+                imei,
+                msg.Protocol,
+                msg.ResponseCode,
+                msg.CorrelationKey,
+                msg.CorrelationTimestamp,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Host is shutting down — propagate so the consumer loop exits cleanly.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // HandleAckAsync is best-effort: log and continue. A missed correlation is not fatal.
+            _logger.LogWarning(
+                ex,
+                "command_ack_handle_error imei={imei} protocol={protocol} responseCode={responseCode}",
+                imei,
+                msg.Protocol,
+                msg.ResponseCode);
         }
     }
 

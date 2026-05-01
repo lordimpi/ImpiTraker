@@ -6,10 +6,26 @@ using ImpiTrack.Protocols.Abstractions;
 namespace ImpiTrack.Protocols.Coban;
 
 /// <summary>
-/// Parser minimo de Coban para paquetes de login, heartbeat y tracker.
+/// Parser minimo de Coban para paquetes de login, heartbeat, tracker y command ACKs.
 /// </summary>
 public sealed partial class CobanProtocolParser : IProtocolParser
 {
+    /// <summary>
+    /// Response codes that Coban devices send back as ACK to server-sent commands.
+    /// Source: Coban protocol manual section 3.1.
+    /// Any numeric code NOT in this set but arriving in keyword position is still treated
+    /// as CommandAck (forward-compatible) — we never throw on unknown codes.
+    /// </summary>
+    private static readonly HashSet<string> _ackCodes = new(StringComparer.Ordinal)
+    {
+        "001",
+        "100", "102", "104", "105", "106", "107", "108", "109", "110",
+        "111", "112", "113", "114", "115", "116", "117", "118", "119",
+        "120", "121", "122", "123", "124", "125",
+        "150", "151", "152",
+        "509", "511", "525", "526"
+    };
+
     /// <inheritdoc />
     public ProtocolId Protocol => ProtocolId.Coban;
 
@@ -26,13 +42,18 @@ public sealed partial class CobanProtocolParser : IProtocolParser
             return false;
         }
 
-        MessageType type = ResolveType(text);
-        if (type == MessageType.Unknown)
+        // Check for CommandAck BEFORE generic type resolution.
+        // Coban ACK format: imei:IMEI,CODE[,optional-position-fields...];
+        // fields[1] is the numeric response code.
+        if (TryParseCommandAck(text, frame, out message))
         {
-            error = "unsupported_coban_message";
-            return false;
+            return true;
         }
 
+        MessageType type = ResolveType(text);
+
+        // Unknown non-ACK packets: emit MessageType.Unknown instead of returning false,
+        // so callers can log/discard gracefully without treating it as a hard parse error.
         string? imei = ParseImei(text);
         DateTimeOffset? gpsTimeUtc = null;
         double? latitude = null;
@@ -74,6 +95,108 @@ public sealed partial class CobanProtocolParser : IProtocolParser
             ignitionOn,
             powerConnected);
 
+        return true;
+    }
+
+    /// <summary>
+    /// Attempts to parse a Coban command ACK packet.
+    /// ACK format: imei:IMEI,CODE[,optional-fields...][;]
+    /// Returns true and populates <paramref name="message"/> if fields[1] is a numeric-only token.
+    /// Does NOT throw — any failure leaves message null and returns false.
+    /// </summary>
+    private static bool TryParseCommandAck(string text, in Frame frame, out ParsedMessage? message)
+    {
+        message = null;
+
+        // Must contain "imei:" prefix to be a candidate (rules out login "##" packets)
+        if (!text.Contains("imei:", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // Strip trailing semicolon before splitting
+        string stripped = text.TrimEnd(';').Trim();
+        string[] fields = stripped.Split(',', StringSplitOptions.TrimEntries);
+
+        // Need at least: [0]=imei:IMEI  [1]=CODE
+        if (fields.Length < 2)
+        {
+            return false;
+        }
+
+        string keyword = fields[1];
+
+        // Only intercept if keyword is purely numeric (response code).
+        // Non-numeric keywords like "tracker", "acc on", "acc off" are NOT ACKs.
+        if (string.IsNullOrEmpty(keyword) || !IsNumericCode(keyword))
+        {
+            return false;
+        }
+
+        string? imei = ParseImei(text);
+
+        // Attempt to parse position data if enough fields are present.
+        // Coban ACK packets CAN carry position data after the response code.
+        DateTimeOffset? gpsTimeUtc = null;
+        double? latitude = null;
+        double? longitude = null;
+        double? speedKmh = null;
+        int? headingDeg = null;
+        bool isTelemetryUsable = false; // default false — ACK without confirmed position
+        string? telemetryError = null;
+        bool? ignitionOn = null;
+        bool? powerConnected = null;
+
+        // ACK position fields mirror the tracker format but shifted by one (code occupies fields[1]).
+        // Only attempt telemetry if there are enough fields for a full tracking packet.
+        // We reuse the tracker telemetry parser by reconstructing a pseudo-tracker text where
+        // fields[1] is replaced with "tracker" so the existing parser accepts the shape.
+        // This avoids duplicating the telemetry logic.
+        if (fields.Length >= 12)
+        {
+            fields[1] = "tracker";
+            string pseudoText = string.Join(',', fields);
+            isTelemetryUsable = TryParseTrackingTelemetry(
+                pseudoText,
+                out gpsTimeUtc,
+                out latitude,
+                out longitude,
+                out speedKmh,
+                out headingDeg,
+                out telemetryError,
+                out ignitionOn,
+                out powerConnected);
+        }
+
+        message = new ParsedMessage(
+            ProtocolId.Coban,
+            MessageType.CommandAck,
+            imei,
+            frame.Payload,
+            text,
+            frame.ReceivedAtUtc,
+            gpsTimeUtc,
+            latitude,
+            longitude,
+            speedKmh,
+            headingDeg,
+            isTelemetryUsable,
+            telemetryError,
+            ignitionOn,
+            powerConnected,
+            ResponseCode: keyword,
+            CorrelationKey: keyword);
+
+        return true;
+    }
+
+    /// <summary>Returns true if the string consists only of ASCII digits.</summary>
+    private static bool IsNumericCode(string value)
+    {
+        foreach (char c in value)
+        {
+            if (c < '0' || c > '9') return false;
+        }
         return true;
     }
 

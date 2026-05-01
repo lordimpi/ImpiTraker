@@ -66,6 +66,12 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<IUserAccountRepository>(sp => sp.GetRequiredService<SqlDataRepository>());
             services.AddSingleton<ITelemetryQueryRepository>(sp => sp.GetRequiredService<SqlDataRepository>());
             services.AddSingleton<IMigrationRunner, SqlScriptMigrationRunner>();
+
+            // Comandos de dispositivo (Phase 7): IMemoryCache es requerido por ProtocolResolver.
+            services.AddMemoryCache();
+            services.AddScoped<IDeviceCommandRepository, DeviceCommandRepository>();
+            services.AddScoped<IDeviceProtocolResolver, DeviceProtocolResolver>();
+            services.AddScoped<IDeviceCommandOwnershipGuard, DeviceCommandOwnershipGuard>();
         }
         else
         {

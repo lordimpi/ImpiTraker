@@ -19,6 +19,9 @@ namespace ImpiTrack.Protocols.Abstractions;
 /// <param name="IgnitionOn">Estado del ACC (encendido del vehiculo). Null si el protocolo no provee este campo.</param>
 /// <param name="PowerConnected">Indica si el dispositivo tiene alimentacion externa conectada. Null si no disponible.</param>
 /// <param name="DoorOpen">Indica si la puerta esta abierta. Null si el protocolo no provee este campo.</param>
+/// <param name="ResponseCode">Codigo de respuesta devuelto por el dispositivo en un ACK de comando. Null para mensajes que no son CommandAck.</param>
+/// <param name="CorrelationKey">Clave de correlacion usada para asociar el ACK con el comando original (keyword Coban o cmd Cantrack). Null cuando no aplica.</param>
+/// <param name="CorrelationTimestamp">Timestamp de correlacion exacto para protocolos que lo soportan (hhmmss Cantrack). Null cuando no aplica.</param>
 public sealed record ParsedMessage(
     ProtocolId Protocol,
     MessageType MessageType,
@@ -35,4 +38,7 @@ public sealed record ParsedMessage(
     string? TelemetryError = null,
     bool? IgnitionOn = null,
     bool? PowerConnected = null,
-    bool? DoorOpen = null);
+    bool? DoorOpen = null,
+    string? ResponseCode = null,
+    string? CorrelationKey = null,
+    string? CorrelationTimestamp = null);

@@ -5,7 +5,8 @@ using ImpiTrack.Protocols.Abstractions;
 namespace ImpiTrack.Protocols.Cantrack;
 
 /// <summary>
-/// Parser minimo de Cantrack para login V0, heartbeat HTBT y paquetes de tracking serie V.
+/// Parser minimo de Cantrack para login V0, heartbeat HTBT, paquetes de tracking serie V y command ACKs.
+/// Handles V4 structured ACK packets and plaintext ACK responses (e.g. "stop engine succeed").
 /// </summary>
 public sealed class CantrackProtocolParser : IProtocolParser
 {
@@ -25,10 +26,22 @@ public sealed class CantrackProtocolParser : IProtocolParser
             return false;
         }
 
+        // Plaintext ACK responses from Cantrack devices do not use the *HQ,...,# envelope.
+        // Examples: "stop engine succeed", "resume engine succeed".
+        // We recognise any non-empty text that does NOT start with '*' as a text ACK.
+        // The device sends these after executing a command — treat as CommandAck.
         if (!text.StartsWith('*'))
         {
-            error = "invalid_cantrack_prefix";
-            return false;
+            message = new ParsedMessage(
+                Protocol,
+                MessageType.CommandAck,
+                null,   // IMEI not available in plaintext responses
+                frame.Payload,
+                text,
+                frame.ReceivedAtUtc,
+                ResponseCode: "TEXT",
+                CorrelationKey: NormalizeTextResponseKey(text));
+            return true;
         }
 
         int hashIndex = text.IndexOf('#');
@@ -42,6 +55,86 @@ public sealed class CantrackProtocolParser : IProtocolParser
 
         string imei = parts[1];
         string command = parts[2].ToUpperInvariant();
+
+        // V4 packet: *HQ,IMEI,V4,CMD,hhmmss,<position-fields...>#
+        // CMD is the echoed command keyword (correlation key).
+        // hhmmss is the timestamp from the server-sent command (correlation timestamp).
+        // Position data may also be present (fields[5+]).
+        if (command == "V4")
+        {
+            string? responseCode = parts.Length >= 4 ? parts[3] : null;
+            string? correlationTimestamp = parts.Length >= 5 ? parts[4] : null;
+
+            // Attempt to parse position data if enough fields are present.
+            DateTimeOffset? gpsTimeUtc = null;
+            double? latitude = null;
+            double? longitude = null;
+            double? speedKmh = null;
+            int? headingDeg = null;
+            bool isTelemetryUsable = false;
+            string? telemetryError = null;
+
+            // V4 position layout (after CMD and hhmmss) mirrors V1:
+            // parts[5]=HHMMSS, parts[6]=S(status), parts[7]=lat, parts[8]=N/S,
+            // parts[9]=lon, parts[10]=E/W, parts[11]=speed, parts[12]=direction, parts[13]=DDMMYY
+            // We build a synthetic parts array with the same layout as V1 for reuse.
+            if (parts.Length >= 14)
+            {
+                // Reconstruct a V1-shaped array: [0]=*HQ, [1]=IMEI, [2]=V1, [3]=YYMMDD, [4]=HHMMSS, [5..11]=position
+                // V4:  parts[3]=CMD, parts[4]=hhmmss, parts[5]=HHMMSS, parts[6]=S, parts[7]=lat, parts[8]=N/S,
+                //      parts[9]=lon, parts[10]=E/W, parts[11]=speed, parts[12]=dir, parts[13]=DDMMYY
+                // Cantrack date in V4 is DDMMYY (field[13]); V1 is YYMMDD (field[3]).
+                // Re-arrange to YYMMDD for TryParseTrackingTelemetry compatibility.
+                string ddmmyy = parts[13];
+                string yymmdd = ddmmyy.Length == 6
+                    ? string.Concat(ddmmyy.AsSpan(4, 2), ddmmyy.AsSpan(2, 2), ddmmyy.AsSpan(0, 2))
+                    : ddmmyy;
+
+                string[] v1Parts = [
+                    parts[0],       // [0] *HQ
+                    parts[1],       // [1] IMEI
+                    "V1",           // [2] synthetic
+                    yymmdd,         // [3] YYMMDD (date)
+                    parts[5],       // [4] HHMMSS (time)
+                    parts[6],       // [5] validity (S field)
+                    parts[7],       // [6] latitude
+                    parts[8],       // [7] N/S
+                    parts[9],       // [8] longitude
+                    parts[10],      // [9] E/W
+                    parts[11],      // [10] speed
+                    parts[12],      // [11] direction
+                ];
+                isTelemetryUsable = TryParseTrackingTelemetry(
+                    v1Parts,
+                    out gpsTimeUtc,
+                    out latitude,
+                    out longitude,
+                    out speedKmh,
+                    out headingDeg,
+                    out telemetryError);
+            }
+
+            message = new ParsedMessage(
+                Protocol,
+                MessageType.CommandAck,
+                string.IsNullOrWhiteSpace(imei) ? null : imei,
+                frame.Payload,
+                text,
+                frame.ReceivedAtUtc,
+                gpsTimeUtc,
+                latitude,
+                longitude,
+                speedKmh,
+                headingDeg,
+                isTelemetryUsable,
+                telemetryError,
+                ResponseCode: responseCode,
+                CorrelationKey: responseCode,
+                CorrelationTimestamp: correlationTimestamp);
+
+            return true;
+        }
+
         MessageType type = command switch
         {
             "V0" => MessageType.Login,
@@ -51,23 +144,23 @@ public sealed class CantrackProtocolParser : IProtocolParser
             _ => MessageType.Unknown
         };
 
-        DateTimeOffset? gpsTimeUtc = null;
-        double? latitude = null;
-        double? longitude = null;
-        double? speedKmh = null;
-        int? headingDeg = null;
-        bool isTelemetryUsable = true;
-        string? telemetryError = null;
+        DateTimeOffset? gpsTimeUtcStd = null;
+        double? latitudeStd = null;
+        double? longitudeStd = null;
+        double? speedKmhStd = null;
+        int? headingDegStd = null;
+        bool isTelemetryUsableStd = true;
+        string? telemetryErrorStd = null;
         if (type == MessageType.Tracking)
         {
-            isTelemetryUsable = TryParseTrackingTelemetry(
+            isTelemetryUsableStd = TryParseTrackingTelemetry(
                 parts,
-                out gpsTimeUtc,
-                out latitude,
-                out longitude,
-                out speedKmh,
-                out headingDeg,
-                out telemetryError);
+                out gpsTimeUtcStd,
+                out latitudeStd,
+                out longitudeStd,
+                out speedKmhStd,
+                out headingDegStd,
+                out telemetryErrorStd);
         }
 
         message = new ParsedMessage(
@@ -77,15 +170,31 @@ public sealed class CantrackProtocolParser : IProtocolParser
             frame.Payload,
             text,
             frame.ReceivedAtUtc,
-            gpsTimeUtc,
-            latitude,
-            longitude,
-            speedKmh,
-            headingDeg,
-            isTelemetryUsable,
-            telemetryError);
+            gpsTimeUtcStd,
+            latitudeStd,
+            longitudeStd,
+            speedKmhStd,
+            headingDegStd,
+            isTelemetryUsableStd,
+            telemetryErrorStd);
 
         return true;
+    }
+
+    /// <summary>
+    /// Normalizes a plaintext ACK response to a stable correlation key.
+    /// Example: "stop engine succeed" → "stop", "resume engine succeed" → "resume".
+    /// Falls back to the full text (lowercased, trimmed) for unknown responses.
+    /// </summary>
+    private static string? NormalizeTextResponseKey(string text)
+    {
+        string lower = text.ToLowerInvariant().Trim();
+        return lower switch
+        {
+            var s when s.StartsWith("stop", StringComparison.Ordinal) => "stop",
+            var s when s.StartsWith("resume", StringComparison.Ordinal) => "resume",
+            _ => lower
+        };
     }
 
     private static bool TryParseTrackingTelemetry(

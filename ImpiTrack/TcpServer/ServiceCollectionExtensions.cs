@@ -14,6 +14,7 @@ using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using TcpServer.BackgroundServices;
 using TcpServer.EventBus;
 using TcpServer.RawQueue;
 
@@ -127,6 +128,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProtocolParser, CantrackProtocolParser>();
         services.AddSingleton<IAckStrategy, CobanAckStrategy>();
         services.AddSingleton<IAckStrategy, CantrackAckStrategy>();
+        services.AddSingleton<IProtocolCommandSerializer, CobanCommandSerializer>();
+        services.AddSingleton<IProtocolCommandSerializer, CantrackCommandSerializer>();
 
         services.TryAddSingleton<ITelemetryNotifier, NullTelemetryNotifier>();
 
@@ -137,6 +140,19 @@ public static class ServiceCollectionExtensions
                 validateDataAnnotations: false,
                 validateOnStart: false);
         services.TryAddSingleton<IDevicePresenceTracker, DevicePresenceTracker>();
+
+        services
+            .BindOptions<DeviceCommandsOptions>(
+                configuration,
+                DeviceCommandsOptions.SectionName,
+                validateDataAnnotations: false,
+                validateOnStart: false);
+
+        // Background services — registered before Worker so they are started first and
+        // OutboundCommandReconnectService subscribes to ImeiAttached before any connection arrives.
+        services.AddHostedService<DeviceCommandStartupRecoveryService>();
+        services.AddHostedService<OutboundCommandReconnectService>();
+        services.AddHostedService<DeviceCommandTimeoutService>();
 
         services.AddHostedService<Worker>();
         services.AddHostedService<InboundProcessingService>();

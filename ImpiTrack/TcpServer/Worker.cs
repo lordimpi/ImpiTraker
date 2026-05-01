@@ -3,6 +3,7 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using ImpiTrack.Application.Abstractions;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.Shared.Options;
 using ImpiTrack.Observability;
@@ -15,6 +16,7 @@ using ImpiTrack.Tcp.Core.Protocols;
 using ImpiTrack.Tcp.Core.Queue;
 using ImpiTrack.Tcp.Core.Security;
 using ImpiTrack.Tcp.Core.Sessions;
+using Microsoft.Extensions.DependencyInjection;
 using TcpServer.RawQueue;
 
 namespace TcpServer;
@@ -29,6 +31,7 @@ public sealed class Worker : BackgroundService
     private readonly IProtocolResolver _protocolResolver;
     private readonly IReadOnlyDictionary<ProtocolId, IProtocolParser> _parsers;
     private readonly IReadOnlyDictionary<ProtocolId, IAckStrategy> _ackStrategies;
+    private readonly IReadOnlyDictionary<ProtocolId, IProtocolCommandSerializer> _serializers;
     private readonly IInboundQueue _inboundQueue;
     private readonly IRawPacketQueue _rawPacketQueue;
     private readonly ISessionManager _sessionManager;
@@ -36,6 +39,7 @@ public sealed class Worker : BackgroundService
     private readonly IIngestionRepository _ingestionRepository;
     private readonly IAbuseGuard _abuseGuard;
     private readonly ITcpMetrics _tcpMetrics;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     /// <summary>
     /// Crea el worker de ingesta TCP y sus dependencias de runtime.
@@ -45,31 +49,36 @@ public sealed class Worker : BackgroundService
     /// <param name="protocolResolver">Estrategia de resolucion de protocolo.</param>
     /// <param name="parsers">Parsers de protocolo registrados.</param>
     /// <param name="ackStrategies">Estrategias ACK registradas.</param>
+    /// <param name="serializers">Serializadores de comandos por protocolo.</param>
     /// <param name="inboundQueue">Cola entrante acotada.</param>
     /// <param name="sessionManager">Administrador de estado de sesiones.</param>
     /// <param name="packetIdGenerator">Generador de id de paquete.</param>
     /// <param name="ingestionRepository">Repositorio de persistencia de ingesta.</param>
     /// <param name="abuseGuard">Control de abuso por IP.</param>
     /// <param name="tcpMetrics">Publicador de metricas TCP.</param>
+    /// <param name="scopeFactory">Fabrica de scopes para resolver dependencias scoped (IDeviceCommandService) desde el write-loop singleton.</param>
     public Worker(
         ILogger<Worker> logger,
         IGenericOptionsService<TcpServerOptions> optionsService,
         IProtocolResolver protocolResolver,
         IEnumerable<IProtocolParser> parsers,
         IEnumerable<IAckStrategy> ackStrategies,
+        IEnumerable<IProtocolCommandSerializer> serializers,
         IInboundQueue inboundQueue,
         IRawPacketQueue rawPacketQueue,
         ISessionManager sessionManager,
         IPacketIdGenerator packetIdGenerator,
         IIngestionRepository ingestionRepository,
         IAbuseGuard abuseGuard,
-        ITcpMetrics tcpMetrics)
+        ITcpMetrics tcpMetrics,
+        IServiceScopeFactory scopeFactory)
     {
         _logger = logger;
         _options = optionsService.GetOptions();
         _protocolResolver = protocolResolver;
         _parsers = parsers.ToDictionary(x => x.Protocol);
         _ackStrategies = ackStrategies.ToDictionary(x => x.Protocol);
+        _serializers = serializers.ToDictionary(x => x.Protocol);
         _inboundQueue = inboundQueue;
         _rawPacketQueue = rawPacketQueue;
         _sessionManager = sessionManager;
@@ -77,6 +86,7 @@ public sealed class Worker : BackgroundService
         _ingestionRepository = ingestionRepository;
         _abuseGuard = abuseGuard;
         _tcpMetrics = tcpMetrics;
+        _scopeFactory = scopeFactory;
     }
 
     /// <summary>
@@ -163,6 +173,14 @@ public sealed class Worker : BackgroundService
                 PipeReader reader = PipeReader.Create(stream);
                 bool disconnectRequested = false;
 
+                // Phase 4: linked CTS shared between read and write loops.
+                // When the read loop exits via any of its 6 paths, the finally below
+                // cancels the CTS and completes the channel so the write loop drains and exits.
+                using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
+                Task writeLoopTask = RunWriteLoopAsync(stream, session, endpoint.Port, remoteIp, connectionCts.Token);
+
+                try
+                {
                 while (!serverToken.IsCancellationRequested)
                 {
                     if (_abuseGuard.IsBlocked(remoteIp, DateTimeOffset.UtcNow, out DateTimeOffset? blockedUntil))
@@ -330,8 +348,12 @@ public sealed class Worker : BackgroundService
                         if (_ackStrategies.TryGetValue(parsed.Protocol, out IAckStrategy? ackStrategy) &&
                             ackStrategy.TryBuildAck(parsed, out ReadOnlyMemory<byte> ackBytes))
                         {
+                            // Phase 4: enqueue ACK on outbound channel; the write-loop is the sole writer to the stream.
+                            // Backpressure: WriteAsync waits if channel is full (capacity 16, FullMode=Wait).
                             DateTimeOffset ackStarted = DateTimeOffset.UtcNow;
-                            await stream.WriteAsync(ackBytes, serverToken);
+                            await session.OutboundChannel.Writer.WriteAsync(
+                                new OutboundFrame.RawAck(ackBytes),
+                                connectionCts.Token);
                             ackLatencyMs = (DateTimeOffset.UtcNow - ackStarted).TotalMilliseconds;
                             ackAtUtc = DateTimeOffset.UtcNow;
                             ackPayload = Truncate(ReadText(ackBytes), 200);
@@ -482,6 +504,33 @@ public sealed class Worker : BackgroundService
                 }
 
                 await reader.CompleteAsync();
+                }
+                finally
+                {
+                    // Phase 4: signal write loop to stop and drain.
+                    // Order matters: cancel first (interrupts any pending stream.WriteAsync),
+                    // then complete the writer (release any awaiting WriteAsync producer with a clean exit),
+                    // then await the write task to ensure no further writes after stream disposal.
+                    try { connectionCts.Cancel(); } catch { /* swallow */ }
+                    session.OutboundChannel.Writer.TryComplete();
+                    try
+                    {
+                        await writeLoopTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // expected on shutdown
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "write_loop_terminated_with_error sessionId={sessionId} remoteIp={remoteIp} port={port}",
+                            session.SessionId,
+                            remoteIp,
+                            endpoint.Port);
+                    }
+                }
             }
         }
         catch (InvalidDataException ex)
@@ -561,6 +610,219 @@ public sealed class Worker : BackgroundService
                 endpoint.Port,
                 closeReason);
         }
+    }
+
+    /// <summary>
+    /// Phase 4 write loop: sole writer to NetworkStream.
+    /// Drains <see cref="SessionState.OutboundChannel"/> and writes bytes for both
+    /// <see cref="OutboundFrame.RawAck"/> (login/heartbeat responses) and
+    /// <see cref="OutboundFrame.Command"/> (serialized device commands) frames.
+    /// Exits cleanly when the channel is completed (session close) or when the linked CTS is cancelled (any read-loop exit path).
+    /// </summary>
+    private async Task RunWriteLoopAsync(
+        NetworkStream stream,
+        SessionState session,
+        int port,
+        string remoteIp,
+        CancellationToken ct)
+    {
+        _logger.LogDebug(
+            "write_loop_started sessionId={sessionId} remoteIp={remoteIp} port={port}",
+            session.SessionId,
+            remoteIp,
+            port);
+
+        string exitReason = "channel_completed";
+        try
+        {
+            await foreach (OutboundFrame frame in session.OutboundChannel.Reader.ReadAllAsync(ct))
+            {
+                try
+                {
+                    switch (frame)
+                    {
+                        case OutboundFrame.RawAck ack:
+                            await stream.WriteAsync(ack.Bytes, ct);
+                            break;
+                        case OutboundFrame.Command cmd:
+                            if (_serializers.TryGetValue(session.Protocol, out IProtocolCommandSerializer? serializer))
+                            {
+                                ReadOnlyMemory<byte> cmdBytes = serializer.Serialize(cmd.Cmd);
+                                await stream.WriteAsync(cmdBytes, ct);
+
+                                // REQ-LC-3 / REQ-AUDIT-1: transition to Sent AFTER bytes are flushed.
+                                string payloadText = Encoding.ASCII.GetString(cmdBytes.Span);
+                                (string? correlationKey, string? correlationTimestamp) =
+                                    ExtractCorrelation(session.Protocol, payloadText);
+
+                                await MarkCommandSentAsync(
+                                    cmd.Cmd.CommandId,
+                                    payloadText,
+                                    correlationKey,
+                                    correlationTimestamp,
+                                    session,
+                                    remoteIp,
+                                    port,
+                                    ct);
+                            }
+                            else
+                            {
+                                _logger.LogWarning(
+                                    "write_loop_no_serializer_for_protocol sessionId={sessionId} remoteIp={remoteIp} port={port} protocol={protocol}",
+                                    session.SessionId,
+                                    remoteIp,
+                                    port,
+                                    session.Protocol);
+                            }
+                            break;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    exitReason = "cancelled";
+                    break;
+                }
+                catch (IOException ex)
+                {
+                    exitReason = "io_error";
+                    _logger.LogWarning(
+                        ex,
+                        "write_loop_io_error sessionId={sessionId} remoteIp={remoteIp} port={port}",
+                        session.SessionId,
+                        remoteIp,
+                        port);
+                    break;
+                }
+                catch (ObjectDisposedException ex)
+                {
+                    exitReason = "stream_disposed";
+                    _logger.LogWarning(
+                        ex,
+                        "write_loop_stream_disposed sessionId={sessionId} remoteIp={remoteIp} port={port}",
+                        session.SessionId,
+                        remoteIp,
+                        port);
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            exitReason = "cancelled";
+        }
+        catch (Exception ex)
+        {
+            exitReason = "unexpected_error";
+            _logger.LogError(
+                ex,
+                "write_loop_unexpected_error sessionId={sessionId} remoteIp={remoteIp} port={port}",
+                session.SessionId,
+                remoteIp,
+                port);
+        }
+
+        _logger.LogDebug(
+            "write_loop_exited sessionId={sessionId} remoteIp={remoteIp} port={port} reason={reason}",
+            session.SessionId,
+            remoteIp,
+            port,
+            exitReason);
+    }
+
+    /// <summary>
+    /// Resuelve <see cref="IDeviceCommandService"/> en un scope dedicado y marca el comando como
+    /// <c>Sent</c> tras el flush exitoso al socket. Aislar el scope evita filtrar contexto entre
+    /// despachos y respeta la vida util scoped del servicio.
+    /// Errores se loguean: el comando quedara en <c>Queued</c> y sera recogido por el timeout sweeper
+    /// o el reintento manual; nunca rompemos el write-loop.
+    /// </summary>
+    private async Task MarkCommandSentAsync(
+        Guid commandId,
+        string payloadSent,
+        string? correlationKey,
+        string? correlationTimestamp,
+        SessionState session,
+        string remoteIp,
+        int port,
+        CancellationToken ct)
+    {
+        try
+        {
+            await using AsyncServiceScope scope = _scopeFactory.CreateAsyncScope();
+            IDeviceCommandService commandService =
+                scope.ServiceProvider.GetRequiredService<IDeviceCommandService>();
+
+            await commandService.MarkSentAsync(
+                commandId,
+                payloadSent,
+                correlationKey,
+                correlationTimestamp,
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // shutdown: leave row Queued; timeout sweeper / startup recovery will reconcile.
+            _logger.LogDebug(
+                "mark_sent_cancelled sessionId={sessionId} commandId={commandId}",
+                session.SessionId,
+                commandId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "mark_sent_failed sessionId={sessionId} commandId={commandId} remoteIp={remoteIp} port={port}",
+                session.SessionId,
+                commandId,
+                remoteIp,
+                port);
+        }
+    }
+
+    /// <summary>
+    /// Extrae claves de correlacion del payload serializado para persistencia al transicionar a Sent.
+    /// Coban: keyword (3 digitos) tras el segundo separador (",imei:NNN,KW...").
+    /// Cantrack: CMD del frame V4 (parts[2]) y hhmmss (parts[3]).
+    /// Mantener alineado con DeviceCommandService.ExtractCorrelation.
+    /// </summary>
+    private static (string? CorrelationKey, string? CorrelationTimestamp) ExtractCorrelation(
+        ProtocolId protocol,
+        string payloadText)
+    {
+        if (string.IsNullOrEmpty(payloadText))
+        {
+            return (null, null);
+        }
+
+        if (protocol == ProtocolId.Coban)
+        {
+            // Format: "**,imei:NNN,KEYWORD[,extra]\r\n"
+            string[] parts = payloadText.Split(',');
+            if (parts.Length >= 3)
+            {
+                string keyword = parts[2].Split(',', '\r', '\n')[0].Trim();
+                return (keyword, null);
+            }
+
+            return (null, null);
+        }
+
+        if (protocol == ProtocolId.Cantrack)
+        {
+            // Format: "*HQ,IMEI,CMD,hhmmss,body#"
+            string trimmed = payloadText.TrimStart('*').TrimEnd('#').Trim('\r', '\n');
+            string[] parts = trimmed.Split(',');
+            if (parts.Length >= 4)
+            {
+                string cmd = parts[2].Trim();
+                string ts = parts[3].Trim();
+                return (cmd, ts);
+            }
+
+            return (null, null);
+        }
+
+        return (null, null);
     }
 
     private void RegisterInvalidFrame(

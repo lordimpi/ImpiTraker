@@ -250,3 +250,103 @@ Cobertura de ambos:
 - SQL Server: proveedor principal validado para desarrollo local.
 - EMQX interno: habilitado para pruebas locales.
 - Deuda abierta: `IdentityStorage:Provider=Postgres` diferido hasta estabilidad .NET 10 + EF/Npgsql/Identity.
+
+---
+
+## 12) Outbound Commands (Server → Device)
+
+This section covers the device commands feature: sending control commands from the API to a GPS device over its active TCP session.
+
+Full API reference: [`Docs/device-commands-api.md`](device-commands-api.md)
+
+### Prerequisites
+
+- Device has an active TCP session (or has connected at least once so the protocol is known).
+- You have a valid JWT for a user who owns the device IMEI.
+- `DeviceCommands:Enabled = true` (default) in `appsettings.json`.
+
+### Enqueue a command — Arm (Coban or Cantrack)
+
+```bash
+curl -s -X POST https://localhost:54124/api/me/devices/359586015829802/commands \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"commandType": "Arm"}'
+```
+
+Expected response (202 Accepted):
+
+```json
+{
+  "commandId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "status": "Queued",
+  "queuedAtUtc": "2026-05-01T14:30:00Z"
+}
+```
+
+### Enqueue a dangerous command — CutMotor (requires confirm)
+
+```bash
+curl -s -X POST https://localhost:54124/api/me/devices/359586015829802/commands \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"commandType": "CutMotor", "confirm": true}'
+```
+
+Without `"confirm": true` the response is `400` with `{ "code": "confirmation_required" }`.
+
+### Check command status
+
+```bash
+curl -s https://localhost:54124/api/me/devices/359586015829802/commands/3fa85f64-5717-4562-b3fc-2c963f66afa6 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### List command history
+
+```bash
+# Last 20 commands (default)
+curl -s "https://localhost:54124/api/me/devices/359586015829802/commands" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Filter by status
+curl -s "https://localhost:54124/api/me/devices/359586015829802/commands?status=Acknowledged&pageSize=10" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Receive real-time status via SignalR
+
+Connect to `/hubs/device-commands` with your JWT. The hub adds you to group `user-{yourUserId}` and delivers `CommandStatusChanged` events for all your devices:
+
+```javascript
+const connection = new signalR.HubConnectionBuilder()
+  .withUrl("https://localhost:54124/hubs/device-commands", {
+    accessTokenFactory: () => yourJwtToken
+  })
+  .build();
+
+connection.on("CommandStatusChanged", (payload) => {
+  // payload: { commandId, imei, commandType, status, responseCode, responseText, timestampUtc }
+  console.log(`[${payload.imei}] ${payload.commandType} → ${payload.status}`);
+});
+
+await connection.start();
+```
+
+### What bytes actually go on the wire
+
+**Coban — Arm for IMEI `359586015829802`:**
+
+```
+**,imei:359586015829802,111\r\n
+```
+
+The device echoes `**,imei:359586015829802,111` back. The server correlates this as an Arm ACK (response code `111`) and transitions the command to `Acknowledged`.
+
+**Cantrack — CutMotor for IMEI `111222333444555` at UTC 14:05:09:**
+
+```
+*HQ,111222333444555,CMD,140509,stop654321#
+```
+
+The `140509` timestamp is stored as `correlation_timestamp`. When the device sends back a V4 acknowledgement frame `*HQ,111222333444555,V4,stop654321,140509,...,#`, the server matches it exactly and transitions to `Acknowledged`.

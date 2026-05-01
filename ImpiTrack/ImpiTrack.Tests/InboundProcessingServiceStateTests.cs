@@ -8,6 +8,8 @@ using ImpiTrack.Protocols.Abstractions;
 using ImpiTrack.Tcp.Core.Configuration;
 using ImpiTrack.Tcp.Core.EventBus;
 using ImpiTrack.Tcp.Core.Queue;
+using ImpiTrack.Tcp.Core.Sessions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using TcpServer;
 
@@ -128,6 +130,8 @@ public sealed class InboundProcessingServiceStateTests
             new InMemoryEventBus(),
             new NullTelemetryNotifier(NullLogger<NullTelemetryNotifier>.Instance),
             new DevicePresenceTracker(presenceOptions),
+            new NoOpServiceScopeFactory(),
+            new NoOpSessionManager(),
             tcpOptions,
             eventBusOptions);
     }
@@ -232,5 +236,44 @@ public sealed class InboundProcessingServiceStateTests
         public TOptions GetOptions() => _value;
         public TOptions GetSnapshotOptions() => _value;
         public TOptions GetMonitorOptions() => _value;
+    }
+
+    /// <summary>
+    /// No-op scope factory para tests que no ejercen rutas de CommandAck.
+    /// </summary>
+    private sealed class NoOpServiceScopeFactory : IServiceScopeFactory
+    {
+        public IServiceScope CreateScope() => new NoOpServiceScope();
+
+        private sealed class NoOpServiceScope : IServiceScope
+        {
+            public IServiceProvider ServiceProvider => EmptyServiceProvider.Instance;
+            public void Dispose() { }
+
+            private sealed class EmptyServiceProvider : IServiceProvider
+            {
+                public static readonly EmptyServiceProvider Instance = new();
+                public object? GetService(Type serviceType) => null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// No-op session manager para tests que no ejercen rutas de CommandAck.
+    /// </summary>
+    private sealed class NoOpSessionManager : ISessionManager
+    {
+        public event Action<SessionState>? ImeiAttached;
+        public SessionState Open(string remoteIp, int port) => throw new NotSupportedException();
+        public void Touch(SessionId sessionId) { }
+        public void AttachImei(SessionId sessionId, string? imei) { }
+        public void MarkHeartbeat(SessionId sessionId) { }
+        public void IncrementFramesIn(SessionId sessionId) { }
+        public void IncrementFramesInvalid(SessionId sessionId) { }
+        public void SetCloseReason(SessionId sessionId, string closeReason) { }
+        public bool TryGet(SessionId sessionId, out SessionState? session) { session = null; return false; }
+        public bool Close(SessionId sessionId) => false;
+        public bool TryGetByImei(string imei, out SessionState? session) { session = null; return false; }
+        public bool TryEnqueueCommand(string imei, OutboundFrame frame) => false;
     }
 }

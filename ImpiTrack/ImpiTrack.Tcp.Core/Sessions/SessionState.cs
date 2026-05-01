@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using ImpiTrack.Protocols.Abstractions;
 
 namespace ImpiTrack.Tcp.Core.Sessions;
@@ -7,6 +8,13 @@ namespace ImpiTrack.Tcp.Core.Sessions;
 /// </summary>
 public sealed class SessionState
 {
+    private static readonly BoundedChannelOptions ChannelOpts = new(16)
+    {
+        SingleReader = true,
+        SingleWriter = false,
+        FullMode = BoundedChannelFullMode.Wait
+    };
+
     /// <summary>
     /// Identificador de correlacion de sesion.
     /// </summary>
@@ -43,6 +51,11 @@ public sealed class SessionState
     public string? Imei { get; set; }
 
     /// <summary>
+    /// Protocolo detectado para la sesion.
+    /// </summary>
+    public ProtocolId Protocol { get; set; }
+
+    /// <summary>
     /// Cantidad de frames recibidos en la sesion.
     /// </summary>
     public long FramesIn { get; set; }
@@ -61,4 +74,15 @@ public sealed class SessionState
     /// Marca de tiempo UTC de cierre de sesion cuando aplica.
     /// </summary>
     public DateTimeOffset? DisconnectedAtUtc { get; set; }
+
+    /// <summary>
+    /// Canal de salida acotado para frames salientes (ACKs y comandos).
+    /// SingleReader=true (write-loop), SingleWriter=false (read-loop + command service).
+    /// </summary>
+    public Channel<OutboundFrame> OutboundChannel { get; } = Channel.CreateBounded<OutboundFrame>(ChannelOpts);
+
+    /// <summary>
+    /// Indica si la sesion puede recibir comandos: IMEI conocido y canal no completado.
+    /// </summary>
+    public bool IsCommandable => Imei != null && !OutboundChannel.Reader.Completion.IsCompleted;
 }
