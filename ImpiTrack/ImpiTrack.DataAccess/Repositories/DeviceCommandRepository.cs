@@ -54,7 +54,7 @@ public sealed class DeviceCommandRepository : IDeviceCommandRepository
                 status, queued_at_utc, sent_at_utc, acked_at_utc,
                 response_code, response_text, failure_reason, user_ip, user_agent
             ) VALUES (
-                @CommandId, @Imei, @UserId, @CommandType, @Parameters,
+                @CommandId, @Imei, @UserId, @CommandType, @Parameters::jsonb,
                 @Protocol, @PayloadSent, @CorrelationKey, @CorrelationTimestamp,
                 @Status, @QueuedAtUtc, @SentAtUtc, @AckedAtUtc,
                 @ResponseCode, @ResponseText, @FailureReason, @UserIp, @UserAgent
