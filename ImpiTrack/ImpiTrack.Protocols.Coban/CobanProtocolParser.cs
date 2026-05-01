@@ -210,9 +210,9 @@ public sealed partial class CobanProtocolParser : IProtocolParser
         }
 
         if (fields.Length > 12 &&
-            int.TryParse(fields[12], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedHeadingDeg))
+            double.TryParse(fields[12], NumberStyles.Float, CultureInfo.InvariantCulture, out double parsedHeadingDeg))
         {
-            headingDeg = parsedHeadingDeg;
+            headingDeg = (int)Math.Round(parsedHeadingDeg);
         }
 
         // B.3: IgnitionOn from field[1] message type and field[14] ACC bit.
