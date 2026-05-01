@@ -147,6 +147,7 @@ public sealed class Worker : BackgroundService
     {
         string remoteIp = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "unknown";
         SessionState session = _sessionManager.Open(remoteIp, endpoint.Port);
+        session.Protocol = ProtocolIdParser.Parse(endpoint.Protocol);
         IFrameDecoder frameDecoder = CreateDecoderForEndpoint(endpoint);
         DateTimeOffset connectedAt = session.ConnectedAtUtc;
         bool firstFrameReceived = false;
