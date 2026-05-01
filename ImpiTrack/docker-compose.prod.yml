@@ -12,9 +12,7 @@ services:
       - internal
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: impitrack/api:latest
     restart: always
     ports:
       - "8080:8080"
