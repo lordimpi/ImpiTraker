@@ -35,8 +35,8 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     // Los códigos numéricos (105/106/107/114/115) son del protocolo Coban GPRS extendido.
     private static readonly Dictionary<DeviceCommandType, string> _keywords = new()
     {
-        [DeviceCommandType.Arm]                   = "A",
-        [DeviceCommandType.Disarm]                = "B",
+        [DeviceCommandType.Arm]                   = "111",
+        [DeviceCommandType.Disarm]                = "112",
         [DeviceCommandType.CutMotor]              = "J",
         [DeviceCommandType.RestoreMotor]          = "K",
         [DeviceCommandType.RequestSinglePosition] = "B",
