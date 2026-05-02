@@ -29,17 +29,17 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     /// <inheritdoc />
     public ProtocolId Protocol => ProtocolId.Coban;
 
-    // Letra que el servidor envia al dispositivo para cada tipo de comando.
-    // B=posicion, C=cortar motor, D=restaurar motor, E=armar, F=desarmar.
-    // Los comandos sin letra conocida (alarmas, geocerca) usan codigos numericos
-    // del protocolo extendido Coban — pueden no funcionar en todos los firmwares.
+    // Codigos numericos del protocolo Coban GPRS (ref: "GPRS PROTOCOL" Shenzhen Coban 2014-12-12).
+    // Formato server→device: **,imei:IMEI,KEYWORD\r\n  (sin password, sin semicolon final).
+    // Nota: los codigos de letra A/B/J/K/G son del protocolo Baanool propietario (SMS/BT),
+    // NO del protocolo GPRS TCP que usa este servidor.
     private static readonly Dictionary<DeviceCommandType, string> _keywords = new()
     {
-        [DeviceCommandType.Arm]                  = "A",
-        [DeviceCommandType.Disarm]               = "B",
-        [DeviceCommandType.CutMotor]             = "J",
-        [DeviceCommandType.RestoreMotor]         = "K",
-        [DeviceCommandType.RequestSinglePosition] = "G",
+        [DeviceCommandType.Arm]                  = "111",
+        [DeviceCommandType.Disarm]               = "112",
+        [DeviceCommandType.CutMotor]             = "109",
+        [DeviceCommandType.RestoreMotor]         = "110",
+        [DeviceCommandType.RequestSinglePosition] = "100",
         [DeviceCommandType.SetMovementAlarm]     = "105",
         [DeviceCommandType.CancelMovementAlarm]  = "106",
         [DeviceCommandType.SetOverspeedAlarm]    = "107",
@@ -70,10 +70,9 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         return Encoding.ASCII.GetBytes(wire);
     }
 
+    // Formato oficial Coban GPRS: **,imei:IMEI,KEYWORD\r\n (sin password TCP, sin semicolon).
     private string BuildSimple(string imei, string keyword) =>
-        string.IsNullOrEmpty(_password)
-            ? $"##,imei:{imei},{keyword};"
-            : $"##,imei:{imei},{keyword},{_password};";
+        $"**,imei:{imei},{keyword}\r\n";
 
     private static string BuildWithRadius(DeviceCommand command, string keyword)
     {
@@ -86,7 +85,7 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
                 $"El parametro 'radius' debe ser un entero positivo. Valor recibido: '{rawRadius}'.",
                 nameof(command));
 
-        return $"**,imei:{command.Imei},{keyword},{radius.ToString("D5")};";
+        return $"**,imei:{command.Imei},{keyword},{radius.ToString("D5")}\r\n";
     }
 
     private static string BuildWithSpeed(DeviceCommand command, string keyword)
@@ -100,7 +99,7 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
                 $"El parametro 'speed' debe ser un entero positivo. Valor recibido: '{rawSpeed}'.",
                 nameof(command));
 
-        return $"**,imei:{command.Imei},{keyword},{speed.ToString("D3")};";
+        return $"**,imei:{command.Imei},{keyword},{speed.ToString("D3")}\r\n";
     }
 
     private static string BuildWithGeofence(DeviceCommand command, string keyword)
@@ -115,6 +114,6 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         if (string.IsNullOrWhiteSpace(latBR)) throw new CommandParameterMissingException("latBR");
         if (string.IsNullOrWhiteSpace(lonBR)) throw new CommandParameterMissingException("lonBR");
 
-        return $"**,imei:{command.Imei},{keyword},{latTL},{lonTL};{latBR},{lonBR};";
+        return $"**,imei:{command.Imei},{keyword},{latTL},{lonTL};{latBR},{lonBR}\r\n";
     }
 }
