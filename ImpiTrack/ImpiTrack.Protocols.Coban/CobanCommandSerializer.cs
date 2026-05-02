@@ -29,23 +29,23 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     /// <inheritdoc />
     public ProtocolId Protocol => ProtocolId.Coban;
 
-    // Codigos numericos del protocolo Coban GPRS (ref: "GPRS PROTOCOL" Shenzhen Coban 2014-12-12).
-    // Formato server→device: **,imei:IMEI,KEYWORD\r\n  (sin password, sin semicolon final).
-    // Nota: los codigos de letra A/B/J/K/G son del protocolo Baanool propietario (SMS/BT),
-    // NO del protocolo GPRS TCP que usa este servidor.
+    // Protocolo GPS103 (ref: "GPS102 & 103 GPRS data protocol.ods").
+    // Formato server→device: **,imei:IMEI,LETRA  (sin terminador).
+    // Arm/Disarm/CutMotor/RestoreMotor son extensiones Baanool (A/B/J/K) — no están en GPS103 base.
+    // Los códigos numéricos (105/106/107/114/115) son del protocolo Coban GPRS extendido.
     private static readonly Dictionary<DeviceCommandType, string> _keywords = new()
     {
-        [DeviceCommandType.Arm]                  = "111",
-        [DeviceCommandType.Disarm]               = "112",
-        [DeviceCommandType.CutMotor]             = "109",
-        [DeviceCommandType.RestoreMotor]         = "110",
-        [DeviceCommandType.RequestSinglePosition] = "100",
-        [DeviceCommandType.SetMovementAlarm]     = "105",
-        [DeviceCommandType.CancelMovementAlarm]  = "106",
-        [DeviceCommandType.SetOverspeedAlarm]    = "107",
-        [DeviceCommandType.SetGeofence]          = "114",
-        [DeviceCommandType.CancelGeofence]       = "115",
-        [DeviceCommandType.CancelAlarm]          = "104",
+        [DeviceCommandType.Arm]                   = "A",
+        [DeviceCommandType.Disarm]                = "B",
+        [DeviceCommandType.CutMotor]              = "J",
+        [DeviceCommandType.RestoreMotor]          = "K",
+        [DeviceCommandType.RequestSinglePosition] = "B",
+        [DeviceCommandType.SetMovementAlarm]      = "G",
+        [DeviceCommandType.CancelMovementAlarm]   = "E",
+        [DeviceCommandType.SetOverspeedAlarm]     = "H",
+        [DeviceCommandType.SetGeofence]           = "114",
+        [DeviceCommandType.CancelGeofence]        = "115",
+        [DeviceCommandType.CancelAlarm]           = "E",
     };
 
     /// <inheritdoc />
@@ -70,9 +70,9 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         return Encoding.ASCII.GetBytes(wire);
     }
 
-    // Formato oficial Coban GPRS: **,imei:IMEI,KEYWORD\r\n (sin password TCP, sin semicolon).
+    // Formato GPS103 oficial: **,imei:IMEI,KEYWORD  (sin terminador).
     private string BuildSimple(string imei, string keyword) =>
-        $"**,imei:{imei},{keyword}\r\n";
+        $"**,imei:{imei},{keyword}";
 
     private static string BuildWithRadius(DeviceCommand command, string keyword)
     {
@@ -85,7 +85,7 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
                 $"El parametro 'radius' debe ser un entero positivo. Valor recibido: '{rawRadius}'.",
                 nameof(command));
 
-        return $"**,imei:{command.Imei},{keyword},{radius.ToString("D5")}\r\n";
+        return $"**,imei:{command.Imei},{keyword},{radius.ToString("D5")}";
     }
 
     private static string BuildWithSpeed(DeviceCommand command, string keyword)
@@ -99,7 +99,7 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
                 $"El parametro 'speed' debe ser un entero positivo. Valor recibido: '{rawSpeed}'.",
                 nameof(command));
 
-        return $"**,imei:{command.Imei},{keyword},{speed.ToString("D3")}\r\n";
+        return $"**,imei:{command.Imei},{keyword},{speed.ToString("D3")}";
     }
 
     private static string BuildWithGeofence(DeviceCommand command, string keyword)
@@ -114,6 +114,6 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         if (string.IsNullOrWhiteSpace(latBR)) throw new CommandParameterMissingException("latBR");
         if (string.IsNullOrWhiteSpace(lonBR)) throw new CommandParameterMissingException("lonBR");
 
-        return $"**,imei:{command.Imei},{keyword},{latTL},{lonTL};{latBR},{lonBR}\r\n";
+        return $"**,imei:{command.Imei},{keyword},{latTL},{lonTL};{latBR},{lonBR}";
     }
 }
