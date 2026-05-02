@@ -128,11 +128,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProtocolParser, CantrackProtocolParser>();
         services.AddSingleton<IAckStrategy, CobanAckStrategy>();
         services.AddSingleton<IAckStrategy, CantrackAckStrategy>();
-        services.AddSingleton<IProtocolCommandSerializer>(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<DeviceCommandsOptions>>().Value;
-            return new CobanCommandSerializer(opts.CobanDefaultPassword);
-        });
+        services.AddSingleton<IProtocolCommandSerializer, CobanCommandSerializer>();
         services.AddSingleton<IProtocolCommandSerializer, CantrackCommandSerializer>();
 
         services.TryAddSingleton<ITelemetryNotifier, NullTelemetryNotifier>();
