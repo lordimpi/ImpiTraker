@@ -5,10 +5,18 @@ namespace ImpiTrack.Protocols.Coban;
 
 /// <summary>
 /// Serializa comandos salientes al formato wire de Coban.
-/// Formato base: **,imei:{IMEI},{KEYWORD}[,{PARAMS}]\r\n
+/// Formato base: **,imei:{IMEI},{KEYWORD}[,{PASSWORD}][,{PARAMS}]\r\n
+/// El password se incluye cuando esta configurado (algunos firmwares lo requieren).
 /// </summary>
 public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 {
+    private readonly string _password;
+
+    public CobanCommandSerializer(string password = "")
+    {
+        _password = password;
+    }
+
     /// <inheritdoc />
     public ProtocolId Protocol => ProtocolId.Coban;
 
@@ -61,10 +69,12 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     // Builders
     // -------------------------------------------------------------------------
 
-    private static string Build(string imei, string keyword)
-        => $"**,imei:{imei},{keyword}\r\n";
+    private string Build(string imei, string keyword)
+        => string.IsNullOrEmpty(_password)
+            ? $"**,imei:{imei},{keyword}\r\n"
+            : $"**,imei:{imei},{keyword},{_password}\r\n";
 
-    private static string BuildWithRadius(DeviceCommand command, string keyword)
+    private string BuildWithRadius(DeviceCommand command, string keyword)
     {
         string? rawRadius = command.Parameters?["radius"]?.ToString();
         if (string.IsNullOrWhiteSpace(rawRadius))
@@ -81,10 +91,12 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 
         // Coban espera el radio como string de 5 digitos con ceros a la izquierda.
         string paddedRadius = radius.ToString("D5");
-        return $"**,imei:{command.Imei},{keyword},{paddedRadius}\r\n";
+        return string.IsNullOrEmpty(_password)
+            ? $"**,imei:{command.Imei},{keyword},{paddedRadius}\r\n"
+            : $"**,imei:{command.Imei},{keyword},{_password},{paddedRadius}\r\n";
     }
 
-    private static string BuildWithSpeed(DeviceCommand command, string keyword)
+    private string BuildWithSpeed(DeviceCommand command, string keyword)
     {
         string? rawSpeed = command.Parameters?["speed"]?.ToString();
         if (string.IsNullOrWhiteSpace(rawSpeed))
@@ -101,10 +113,12 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 
         // Coban espera la velocidad como string de 3 digitos con ceros a la izquierda.
         string paddedSpeed = speed.ToString("D3");
-        return $"**,imei:{command.Imei},{keyword},{paddedSpeed}\r\n";
+        return string.IsNullOrEmpty(_password)
+            ? $"**,imei:{command.Imei},{keyword},{paddedSpeed}\r\n"
+            : $"**,imei:{command.Imei},{keyword},{_password},{paddedSpeed}\r\n";
     }
 
-    private static string BuildWithGeofence(DeviceCommand command, string keyword)
+    private string BuildWithGeofence(DeviceCommand command, string keyword)
     {
         string? latTL = command.Parameters?["latTL"]?.ToString();
         string? lonTL = command.Parameters?["lonTL"]?.ToString();
@@ -116,7 +130,9 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         if (string.IsNullOrWhiteSpace(latBR)) throw new CommandParameterMissingException("latBR");
         if (string.IsNullOrWhiteSpace(lonBR)) throw new CommandParameterMissingException("lonBR");
 
-        // Formato Coban geocerca: **,imei:IMEI,114,latTL,lonTL;latBR,lonBR
-        return $"**,imei:{command.Imei},{keyword},{latTL},{lonTL};{latBR},{lonBR}\r\n";
+        // Formato Coban geocerca: **,imei:IMEI,114,[password,]latTL,lonTL;latBR,lonBR
+        return string.IsNullOrEmpty(_password)
+            ? $"**,imei:{command.Imei},{keyword},{latTL},{lonTL};{latBR},{lonBR}\r\n"
+            : $"**,imei:{command.Imei},{keyword},{_password},{latTL},{lonTL};{latBR},{lonBR}\r\n";
     }
 }
