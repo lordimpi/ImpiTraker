@@ -72,8 +72,8 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 
     private string BuildSimple(string imei, string keyword) =>
         string.IsNullOrEmpty(_password)
-            ? $"**,imei:{imei},{keyword};"
-            : $"**,imei:{imei},{keyword},{_password};";
+            ? $"##,imei:{imei},{keyword};"
+            : $"##,imei:{imei},{keyword},{_password};";
 
     private static string BuildWithRadius(DeviceCommand command, string keyword)
     {
