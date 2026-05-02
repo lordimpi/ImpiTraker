@@ -7,6 +7,9 @@ VPS_HOST="18.217.233.84"
 VPS_KEY="$HOME/.ssh/my_key_pair.pem"
 COMPOSE_FILE="~/ImpiTraker/ImpiTrack/docker-compose.prod.yml"
 
+echo "==> Pushing local commits to remote"
+git push origin dev
+
 echo "==> Building $IMAGE"
 docker build -t "$IMAGE" -f "$(dirname "$0")/../Dockerfile" "$(dirname "$0")/.."
 
