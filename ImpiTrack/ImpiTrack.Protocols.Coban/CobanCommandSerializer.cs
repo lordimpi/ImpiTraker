@@ -4,13 +4,14 @@ using ImpiTrack.Protocols.Abstractions;
 namespace ImpiTrack.Protocols.Coban;
 
 /// <summary>
-/// Serializa comandos salientes al formato wire de Coban TK103B.
-/// Formato: **,imei:{IMEI},{LETTER},{HHMMSS}[,{PARAMS}]\r\n
+/// Serializa comandos salientes al formato wire Baanool 403CD.
+/// Formato: **,imei:{IMEI},{LETTER}[,{PARAMS}];
 ///
-/// Los codigos LETRA son los que el servidor envia al dispositivo.
+/// Los codigos LETRA son los que el servidor envia al dispositivo (A/B/G/J/K).
 /// Los codigos NUMERICOS (109, 110, 111, 112...) son los que el dispositivo
 /// envia de vuelta como ACK — esos van en el parser, no aqui.
-/// Referencia: traccar CobanProtocolEncoder, protocolo TK103B estandar.
+/// Terminador: punto y coma (;), sin timestamp HHMMSS.
+/// Referencia: protocolo Baanool/Coban serie 403.
 /// </summary>
 public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 {
@@ -23,11 +24,11 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     // del protocolo extendido Coban — pueden no funcionar en todos los firmwares.
     private static readonly Dictionary<DeviceCommandType, string> _keywords = new()
     {
-        [DeviceCommandType.Arm]                  = "E",
-        [DeviceCommandType.Disarm]               = "F",
-        [DeviceCommandType.CutMotor]             = "C",
-        [DeviceCommandType.RestoreMotor]         = "D",
-        [DeviceCommandType.RequestSinglePosition] = "B",
+        [DeviceCommandType.Arm]                  = "A",
+        [DeviceCommandType.Disarm]               = "B",
+        [DeviceCommandType.CutMotor]             = "J",
+        [DeviceCommandType.RestoreMotor]         = "K",
+        [DeviceCommandType.RequestSinglePosition] = "G",
         [DeviceCommandType.SetMovementAlarm]     = "105",
         [DeviceCommandType.CancelMovementAlarm]  = "106",
         [DeviceCommandType.SetOverspeedAlarm]    = "107",
@@ -47,20 +48,18 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
             throw new CommandNotSupportedByProtocolException(command.Type, ProtocolId.Coban);
         }
 
-        string hhmmss = DateTimeOffset.UtcNow.ToString("HHmmss");
-
         string wire = command.Type switch
         {
-            DeviceCommandType.SetMovementAlarm   => BuildWithRadius(command, keyword, hhmmss),
-            DeviceCommandType.SetOverspeedAlarm  => BuildWithSpeed(command, keyword, hhmmss),
-            DeviceCommandType.SetGeofence        => BuildWithGeofence(command, keyword, hhmmss),
-            _                                    => $"**,imei:{command.Imei},{keyword},{hhmmss}\r\n",
+            DeviceCommandType.SetMovementAlarm   => BuildWithRadius(command, keyword),
+            DeviceCommandType.SetOverspeedAlarm  => BuildWithSpeed(command, keyword),
+            DeviceCommandType.SetGeofence        => BuildWithGeofence(command, keyword),
+            _                                    => $"**,imei:{command.Imei},{keyword};",
         };
 
         return Encoding.ASCII.GetBytes(wire);
     }
 
-    private static string BuildWithRadius(DeviceCommand command, string keyword, string hhmmss)
+    private static string BuildWithRadius(DeviceCommand command, string keyword)
     {
         string? rawRadius = command.Parameters?["radius"]?.ToString();
         if (string.IsNullOrWhiteSpace(rawRadius))
@@ -71,10 +70,10 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
                 $"El parametro 'radius' debe ser un entero positivo. Valor recibido: '{rawRadius}'.",
                 nameof(command));
 
-        return $"**,imei:{command.Imei},{keyword},{hhmmss},{radius.ToString("D5")}\r\n";
+        return $"**,imei:{command.Imei},{keyword},{radius.ToString("D5")};";
     }
 
-    private static string BuildWithSpeed(DeviceCommand command, string keyword, string hhmmss)
+    private static string BuildWithSpeed(DeviceCommand command, string keyword)
     {
         string? rawSpeed = command.Parameters?["speed"]?.ToString();
         if (string.IsNullOrWhiteSpace(rawSpeed))
@@ -85,10 +84,10 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
                 $"El parametro 'speed' debe ser un entero positivo. Valor recibido: '{rawSpeed}'.",
                 nameof(command));
 
-        return $"**,imei:{command.Imei},{keyword},{hhmmss},{speed.ToString("D3")}\r\n";
+        return $"**,imei:{command.Imei},{keyword},{speed.ToString("D3")};";
     }
 
-    private static string BuildWithGeofence(DeviceCommand command, string keyword, string hhmmss)
+    private static string BuildWithGeofence(DeviceCommand command, string keyword)
     {
         string? latTL = command.Parameters?["latTL"]?.ToString();
         string? lonTL = command.Parameters?["lonTL"]?.ToString();
@@ -100,6 +99,6 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         if (string.IsNullOrWhiteSpace(latBR)) throw new CommandParameterMissingException("latBR");
         if (string.IsNullOrWhiteSpace(lonBR)) throw new CommandParameterMissingException("lonBR");
 
-        return $"**,imei:{command.Imei},{keyword},{hhmmss},{latTL},{lonTL};{latBR},{lonBR}\r\n";
+        return $"**,imei:{command.Imei},{keyword},{latTL},{lonTL};{latBR},{lonBR};";
     }
 }
