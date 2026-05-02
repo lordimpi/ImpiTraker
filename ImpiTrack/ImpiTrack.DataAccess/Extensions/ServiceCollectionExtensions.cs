@@ -1,3 +1,4 @@
+using Dapper;
 using ImpiTrack.Application.Abstractions;
 using ImpiTrack.DataAccess.Abstractions;
 using ImpiTrack.DataAccess.Configuration;
@@ -29,6 +30,8 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration,
         bool registerMigrationHostedService = true)
     {
+        DefaultTypeMap.MatchNamesWithUnderscores = true;
+
         services.AddImpiTrackOptionsCore();
 
         services
