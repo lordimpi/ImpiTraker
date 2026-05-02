@@ -5,16 +5,27 @@ namespace ImpiTrack.Protocols.Coban;
 
 /// <summary>
 /// Serializa comandos salientes al formato wire Baanool 403CD.
-/// Formato: **,imei:{IMEI},{LETTER}[,{PARAMS}];
+/// Formato: **,imei:{IMEI},{LETTER}[,{PASSWORD}];
 ///
 /// Los codigos LETRA son los que el servidor envia al dispositivo (A/B/G/J/K).
 /// Los codigos NUMERICOS (109, 110, 111, 112...) son los que el dispositivo
 /// envia de vuelta como ACK — esos van en el parser, no aqui.
-/// Terminador: punto y coma (;), sin timestamp HHMMSS.
+/// Terminador: punto y coma (;). Password incluido si password != "".
 /// Referencia: protocolo Baanool/Coban serie 403.
 /// </summary>
 public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 {
+    private readonly string _password;
+
+    /// <summary>
+    /// Crea el serializer con password opcional para el formato de comandos.
+    /// </summary>
+    /// <param name="password">Contraseña del dispositivo. Vacío = sin contraseña en el frame.</param>
+    public CobanCommandSerializer(string password = "")
+    {
+        _password = password ?? string.Empty;
+    }
+
     /// <inheritdoc />
     public ProtocolId Protocol => ProtocolId.Coban;
 
@@ -53,11 +64,16 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
             DeviceCommandType.SetMovementAlarm   => BuildWithRadius(command, keyword),
             DeviceCommandType.SetOverspeedAlarm  => BuildWithSpeed(command, keyword),
             DeviceCommandType.SetGeofence        => BuildWithGeofence(command, keyword),
-            _                                    => $"**,imei:{command.Imei},{keyword};",
+            _                                    => BuildSimple(command.Imei, keyword),
         };
 
         return Encoding.ASCII.GetBytes(wire);
     }
+
+    private string BuildSimple(string imei, string keyword) =>
+        string.IsNullOrEmpty(_password)
+            ? $"**,imei:{imei},{keyword};"
+            : $"**,imei:{imei},{keyword},{_password};";
 
     private static string BuildWithRadius(DeviceCommand command, string keyword)
     {
