@@ -5,13 +5,8 @@ namespace ImpiTrack.Protocols.Coban;
 
 /// <summary>
 /// Serializa comandos salientes al formato wire Baanool 403CD.
-/// Formato: **,imei:{IMEI},{LETTER}[,{PASSWORD}];
-///
-/// Los codigos LETRA son los que el servidor envia al dispositivo (A/B/G/J/K).
-/// Los codigos NUMERICOS (109, 110, 111, 112...) son los que el dispositivo
-/// envia de vuelta como ACK — esos van en el parser, no aqui.
-/// Terminador: punto y coma (;). Password incluido si password != "".
-/// Referencia: protocolo Baanool/Coban serie 403.
+/// Formato GPS103: **,imei:{IMEI},{KEYWORD}[,{PARAMS}]  (sin terminador, sin password).
+/// Ref: Traccar Gps103ProtocolEncoder (letter codes B/J/K/L/M) + Coban GPRS protocol.pdf (numeric 104-115).
 /// </summary>
 public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 {
@@ -29,10 +24,9 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     /// <inheritdoc />
     public ProtocolId Protocol => ProtocolId.Coban;
 
-    // Protocolo GPS103 (ref: "GPS102 & 103 GPRS data protocol.ods").
-    // Formato server→device: **,imei:IMEI,LETRA  (sin terminador).
-    // Arm/Disarm/CutMotor/RestoreMotor son extensiones Baanool (A/B/J/K) — no están en GPS103 base.
-    // Los códigos numéricos (105/106/107/114/115) son del protocolo Coban GPRS extendido.
+    // Protocolo GPS103 (ref: Traccar Gps103ProtocolEncoder): B/J/K/L/M son letter codes del estándar GPS103.
+    // Códigos numéricos (104-115): protocolo Coban GPRS extendido (ref: "coban GPRS protocol.pdf", tabla sección 3.1).
+    // No usar G/E/H — esos no están en ningún protocolo documentado para este dispositivo.
     private static readonly Dictionary<DeviceCommandType, string> _keywords = new()
     {
         [DeviceCommandType.Arm]                   = "L",
@@ -40,12 +34,12 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         [DeviceCommandType.CutMotor]              = "J",
         [DeviceCommandType.RestoreMotor]          = "K",
         [DeviceCommandType.RequestSinglePosition] = "B",
-        [DeviceCommandType.SetMovementAlarm]      = "G",
-        [DeviceCommandType.CancelMovementAlarm]   = "E",
-        [DeviceCommandType.SetOverspeedAlarm]     = "H",
+        [DeviceCommandType.SetMovementAlarm]      = "105",
+        [DeviceCommandType.CancelMovementAlarm]   = "106",
+        [DeviceCommandType.SetOverspeedAlarm]     = "107",
         [DeviceCommandType.SetGeofence]           = "114",
         [DeviceCommandType.CancelGeofence]        = "115",
-        [DeviceCommandType.CancelAlarm]           = "E",
+        [DeviceCommandType.CancelAlarm]           = "104",
     };
 
     /// <inheritdoc />
@@ -85,7 +79,7 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
                 $"El parametro 'radius' debe ser un entero positivo. Valor recibido: '{rawRadius}'.",
                 nameof(command));
 
-        return $"**,imei:{command.Imei},{keyword},{radius.ToString("D5")}";
+        return $"**,imei:{command.Imei},{keyword},{radius}";
     }
 
     private static string BuildWithSpeed(DeviceCommand command, string keyword)
