@@ -70,9 +70,11 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         return Encoding.ASCII.GetBytes(wire);
     }
 
-    // Formato GPS103 oficial: **,imei:IMEI,KEYWORD  (sin terminador).
+    // Formato GPS103 oficial: **,imei:IMEI,KEYWORD[,PASSWORD]
     private string BuildSimple(string imei, string keyword) =>
-        $"**,imei:{imei},{keyword}";
+        string.IsNullOrEmpty(_password)
+            ? $"**,imei:{imei},{keyword}"
+            : $"**,imei:{imei},{keyword},{_password}";
 
     private static string BuildWithRadius(DeviceCommand command, string keyword)
     {
