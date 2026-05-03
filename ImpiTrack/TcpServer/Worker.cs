@@ -649,21 +649,10 @@ public sealed class Worker : BackgroundService
                             if (_serializers.TryGetValue(session.Protocol, out IProtocolCommandSerializer? serializer))
                             {
                                 ReadOnlyMemory<byte> cmdBytes = serializer.Serialize(cmd.Cmd);
-
-                                // Temporary diagnostic log — remove after confirming wire dispatch.
-                                string payloadText = Encoding.ASCII.GetString(cmdBytes.Span);
-                                _logger.LogInformation(
-                                    "write_loop_command_dispatch sessionId={sessionId} imei={imei} protocol={protocol} payload='{payload}' hex={hex} bytes={bytes}",
-                                    session.SessionId,
-                                    cmd.Cmd.Imei,
-                                    session.Protocol,
-                                    payloadText,
-                                    Convert.ToHexString(cmdBytes.Span),
-                                    cmdBytes.Length);
-
                                 await stream.WriteAsync(cmdBytes, ct);
 
                                 // REQ-LC-3 / REQ-AUDIT-1: transition to Sent AFTER bytes are flushed.
+                                string payloadText = Encoding.ASCII.GetString(cmdBytes.Span);
                                 (string? correlationKey, string? correlationTimestamp) =
                                     ExtractCorrelation(session.Protocol, payloadText);
 
