@@ -35,8 +35,8 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     // Los códigos numéricos (105/106/107/114/115) son del protocolo Coban GPRS extendido.
     private static readonly Dictionary<DeviceCommandType, string> _keywords = new()
     {
-        [DeviceCommandType.Arm]                   = "111",
-        [DeviceCommandType.Disarm]                = "112",
+        [DeviceCommandType.Arm]                   = "L",
+        [DeviceCommandType.Disarm]                = "M",
         [DeviceCommandType.CutMotor]              = "J",
         [DeviceCommandType.RestoreMotor]          = "K",
         [DeviceCommandType.RequestSinglePosition] = "B",
@@ -70,11 +70,9 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
         return Encoding.ASCII.GetBytes(wire);
     }
 
-    // Formato GPS103: **,imei:IMEI,KEYWORD[,PASSWORD];
+    // Formato GPS103 (ref: Traccar Gps103ProtocolEncoder): **,imei:IMEI,KEYWORD
     private string BuildSimple(string imei, string keyword) =>
-        string.IsNullOrEmpty(_password)
-            ? $"**,imei:{imei},{keyword};"
-            : $"**,imei:{imei},{keyword},{_password};";
+        $"**,imei:{imei},{keyword}";
 
     private static string BuildWithRadius(DeviceCommand command, string keyword)
     {
