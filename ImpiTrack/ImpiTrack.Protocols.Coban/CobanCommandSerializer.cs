@@ -5,8 +5,9 @@ namespace ImpiTrack.Protocols.Coban;
 
 /// <summary>
 /// Serializa comandos salientes al formato wire Baanool 403CD.
-/// Formato GPS103: **,imei:{IMEI},{KEYWORD}[,{PARAMS}]  (sin terminador, sin password).
-/// Ref: Traccar Gps103ProtocolEncoder (letter codes B/J/K/L/M) + Coban GPRS protocol.pdf (numeric 104-115).
+/// Formato: **,imei:{IMEI},{CODE}[,{PARAMS}]  (sin terminador, sin password).
+/// Todos los códigos son numéricos Coban GPRS (ref: "coban GPRS protocol.pdf", sección 3.1).
+/// El dispositivo ACKea con el mismo código, lo que permite correlación exacta server-side.
 /// </summary>
 public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 {
@@ -24,16 +25,17 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     /// <inheritdoc />
     public ProtocolId Protocol => ProtocolId.Coban;
 
-    // Protocolo GPS103 (ref: Traccar Gps103ProtocolEncoder): B/J/K/L/M son letter codes del estándar GPS103.
-    // Códigos numéricos (104-115): protocolo Coban GPRS extendido (ref: "coban GPRS protocol.pdf", tabla sección 3.1).
-    // No usar G/E/H — esos no están en ningún protocolo documentado para este dispositivo.
+    // Todos los comandos usan códigos numéricos del protocolo Coban GPRS (ref: "coban GPRS protocol.pdf", sección 3.1).
+    // El dispositivo ACKea con el mismo código numérico que recibe, lo que permite correlación exacta en el servidor.
+    // Los letter codes GPS103 (L/M/J/K/B) ejecutan en el dispositivo pero no generan ACK numérico —
+    // la correlación nunca cierra y el comando queda en Timeout.
     private static readonly Dictionary<DeviceCommandType, string> _keywords = new()
     {
-        [DeviceCommandType.Arm]                   = "L",
-        [DeviceCommandType.Disarm]                = "M",
-        [DeviceCommandType.CutMotor]              = "J",
-        [DeviceCommandType.RestoreMotor]          = "K",
-        [DeviceCommandType.RequestSinglePosition] = "B",
+        [DeviceCommandType.Arm]                   = "111",
+        [DeviceCommandType.Disarm]                = "112",
+        [DeviceCommandType.CutMotor]              = "109",
+        [DeviceCommandType.RestoreMotor]          = "110",
+        [DeviceCommandType.RequestSinglePosition] = "100",
         [DeviceCommandType.SetMovementAlarm]      = "105",
         [DeviceCommandType.CancelMovementAlarm]   = "106",
         [DeviceCommandType.SetOverspeedAlarm]     = "107",
