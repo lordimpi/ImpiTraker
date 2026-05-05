@@ -6,8 +6,8 @@ namespace ImpiTrack.Protocols.Coban;
 /// <summary>
 /// Serializa comandos salientes al formato wire Baanool 403CD.
 /// Formato: **,imei:{IMEI},{CODE}[,{PARAMS}]  (sin terminador, sin password).
-/// Todos los códigos son numéricos Coban GPRS (ref: "coban GPRS protocol.pdf", sección 3.1).
-/// El dispositivo ACKea con el mismo código, lo que permite correlación exacta server-side.
+/// Arm/Disarm/Motor usan GPS103 letter codes (L/M/J/K/B) — el 403CD no responde a los numéricos equivalentes.
+/// Alarmas y geocerca usan Coban GPRS numérico (104-115) — ACK simétrico, correlación correcta.
 /// </summary>
 public sealed class CobanCommandSerializer : IProtocolCommandSerializer
 {
@@ -25,17 +25,18 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     /// <inheritdoc />
     public ProtocolId Protocol => ProtocolId.Coban;
 
-    // Todos los comandos usan códigos numéricos del protocolo Coban GPRS (ref: "coban GPRS protocol.pdf", sección 3.1).
-    // El dispositivo ACKea con el mismo código numérico que recibe, lo que permite correlación exacta en el servidor.
-    // Los letter codes GPS103 (L/M/J/K/B) ejecutan en el dispositivo pero no generan ACK numérico —
-    // la correlación nunca cierra y el comando queda en Timeout.
+    // El 403CD acepta dos dialectos según el comando:
+    // - GPS103 letter codes (L/M/J/K/B): Arm/Disarm/CutMotor/RestoreMotor/Position — confirmado en dispositivo.
+    //   El dispositivo NO ACKea estos con código numérico: el status quedará Timeout (comportamiento esperado).
+    // - Coban GPRS numérico (ref: "coban GPRS protocol.pdf", sección 3.1): alarmas y geocerca — ACK simétrico,
+    //   correlación cierra correctamente en el servidor.
     private static readonly Dictionary<DeviceCommandType, string> _keywords = new()
     {
-        [DeviceCommandType.Arm]                   = "111",
-        [DeviceCommandType.Disarm]                = "112",
-        [DeviceCommandType.CutMotor]              = "109",
-        [DeviceCommandType.RestoreMotor]          = "110",
-        [DeviceCommandType.RequestSinglePosition] = "100",
+        [DeviceCommandType.Arm]                   = "L",
+        [DeviceCommandType.Disarm]                = "M",
+        [DeviceCommandType.CutMotor]              = "J",
+        [DeviceCommandType.RestoreMotor]          = "K",
+        [DeviceCommandType.RequestSinglePosition] = "B",
         [DeviceCommandType.SetMovementAlarm]      = "105",
         [DeviceCommandType.CancelMovementAlarm]   = "106",
         [DeviceCommandType.SetOverspeedAlarm]     = "107",
