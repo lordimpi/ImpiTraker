@@ -252,6 +252,45 @@ public sealed class DeviceCommandService : IDeviceCommandService
     }
 
     /// <inheritdoc />
+    public async Task MarkAutoAcknowledgedAsync(
+        Guid commandId,
+        string payloadSent,
+        CancellationToken ct)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        bool transitioned = await _repo.UpdateStatusAsync(
+            commandId,
+            "Acknowledged",
+            now,
+            payloadSent,
+            correlationKey: null,
+            correlationTimestamp: null,
+            responseCode: "auto_ack",
+            responseText: null,
+            failureReason: null,
+            ct);
+
+        if (!transitioned)
+        {
+            _logger.LogInformation(
+                "device_command_auto_ack_skipped commandId={CommandId} reason=already_terminal_or_missing",
+                commandId);
+            return;
+        }
+
+        DeviceCommandRecord? record = await _repo.GetByIdAsync(commandId, ct);
+        if (record is null)
+        {
+            _logger.LogWarning(
+                "device_command_auto_ack_record_missing commandId={CommandId}",
+                commandId);
+            return;
+        }
+
+        await SafeNotifyAsync(record.UserId, record, ct);
+    }
+
+    /// <inheritdoc />
     public async Task<DeviceCommandRecord?> GetByIdAsync(Guid commandId, Guid userId, CancellationToken ct)
     {
         DeviceCommandRecord? record = await _repo.GetByIdAsync(commandId, ct);

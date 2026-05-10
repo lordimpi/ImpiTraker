@@ -92,6 +92,19 @@ public interface IDeviceCommandService
         string? correlationKey,
         string? correlationTimestamp,
         CancellationToken ct);
+
+    /// <summary>
+    /// Transiciona el comando directamente a <c>Acknowledged</c> tras el envio exitoso,
+    /// para comandos cuyo protocolo no genera ACK numerico (ej: GPS103 letter codes en Coban).
+    /// Persiste el <c>payload_sent</c> y emite la notificacion <c>CommandStatusChanged</c>.
+    /// </summary>
+    /// <param name="commandId">Identificador del comando despachado.</param>
+    /// <param name="payloadSent">Bytes serializados (texto) que se escribieron al stream.</param>
+    /// <param name="ct">Token de cancelacion.</param>
+    Task MarkAutoAcknowledgedAsync(
+        Guid commandId,
+        string payloadSent,
+        CancellationToken ct);
 }
 
 /// <summary>

@@ -49,6 +49,19 @@ public sealed class CobanCommandSerializer : IProtocolCommandSerializer
     public bool Supports(DeviceCommandType type) => _keywords.ContainsKey(type);
 
     /// <inheritdoc />
+    /// GPS103 letter codes (Arm/Disarm/CutMotor/RestoreMotor/RequestSinglePosition) no generan ACK numerico
+    /// en el 403CD — el dispositivo ejecuta pero no responde. Los numericos Coban GPRS sí ACKean.
+    public bool AckExpected(DeviceCommandType type) => type switch
+    {
+        DeviceCommandType.Arm                   => false,
+        DeviceCommandType.Disarm                => false,
+        DeviceCommandType.CutMotor              => false,
+        DeviceCommandType.RestoreMotor          => false,
+        DeviceCommandType.RequestSinglePosition => false,
+        _                                       => true,
+    };
+
+    /// <inheritdoc />
     public ReadOnlyMemory<byte> Serialize(DeviceCommand command)
     {
         if (!_keywords.TryGetValue(command.Type, out string? keyword))

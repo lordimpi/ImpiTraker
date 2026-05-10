@@ -57,6 +57,9 @@ public sealed class CantrackCommandSerializer : IProtocolCommandSerializer
     public bool Supports(DeviceCommandType type) => _keywords.ContainsKey(type);
 
     /// <inheritdoc />
+    public bool AckExpected(DeviceCommandType type) => true;
+
+    /// <inheritdoc />
     /// <exception cref="CommandNotSupportedByProtocolException">
     /// El tipo de comando no esta soportado por Cantrack
     /// (ej: SetOverspeedAlarm, SetGeofence, CancelGeofence, RequestSinglePosition).

@@ -651,20 +651,36 @@ public sealed class Worker : BackgroundService
                                 ReadOnlyMemory<byte> cmdBytes = serializer.Serialize(cmd.Cmd);
                                 await stream.WriteAsync(cmdBytes, ct);
 
-                                // REQ-LC-3 / REQ-AUDIT-1: transition to Sent AFTER bytes are flushed.
+                                // REQ-LC-3 / REQ-AUDIT-1: transition AFTER bytes are flushed.
                                 string payloadText = Encoding.ASCII.GetString(cmdBytes.Span);
-                                (string? correlationKey, string? correlationTimestamp) =
-                                    ExtractCorrelation(session.Protocol, payloadText);
 
-                                await MarkCommandSentAsync(
-                                    cmd.Cmd.CommandId,
-                                    payloadText,
-                                    correlationKey,
-                                    correlationTimestamp,
-                                    session,
-                                    remoteIp,
-                                    port,
-                                    ct);
+                                if (!serializer.AckExpected(cmd.Cmd.Type))
+                                {
+                                    // GPS103 letter codes (L/M/J/K/B): el dispositivo ejecuta pero no ACKea.
+                                    // Transicionar directamente a Acknowledged para no dejar el comando en Timeout.
+                                    await MarkCommandAutoAcknowledgedAsync(
+                                        cmd.Cmd.CommandId,
+                                        payloadText,
+                                        session,
+                                        remoteIp,
+                                        port,
+                                        ct);
+                                }
+                                else
+                                {
+                                    (string? correlationKey, string? correlationTimestamp) =
+                                        ExtractCorrelation(session.Protocol, payloadText);
+
+                                    await MarkCommandSentAsync(
+                                        cmd.Cmd.CommandId,
+                                        payloadText,
+                                        correlationKey,
+                                        correlationTimestamp,
+                                        session,
+                                        remoteIp,
+                                        port,
+                                        ct);
+                                }
                             }
                             else
                             {
@@ -737,6 +753,41 @@ public sealed class Worker : BackgroundService
     /// Errores se loguean: el comando quedara en <c>Queued</c> y sera recogido por el timeout sweeper
     /// o el reintento manual; nunca rompemos el write-loop.
     /// </summary>
+    private async Task MarkCommandAutoAcknowledgedAsync(
+        Guid commandId,
+        string payloadSent,
+        SessionState session,
+        string remoteIp,
+        int port,
+        CancellationToken ct)
+    {
+        try
+        {
+            await using AsyncServiceScope scope = _scopeFactory.CreateAsyncScope();
+            IDeviceCommandService commandService =
+                scope.ServiceProvider.GetRequiredService<IDeviceCommandService>();
+
+            await commandService.MarkAutoAcknowledgedAsync(commandId, payloadSent, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogDebug(
+                "mark_auto_ack_cancelled sessionId={sessionId} commandId={commandId}",
+                session.SessionId,
+                commandId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "mark_auto_ack_failed sessionId={sessionId} commandId={commandId} remoteIp={remoteIp} port={port}",
+                session.SessionId,
+                commandId,
+                remoteIp,
+                port);
+        }
+    }
+
     private async Task MarkCommandSentAsync(
         Guid commandId,
         string payloadSent,

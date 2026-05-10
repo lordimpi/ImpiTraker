@@ -19,6 +19,15 @@ public interface IProtocolCommandSerializer
     bool Supports(DeviceCommandType type);
 
     /// <summary>
+    /// Indica si el dispositivo enviara un ACK numerico para el tipo de comando especificado.
+    /// Cuando retorna <c>false</c>, el write-loop debe transicionar el comando directamente
+    /// a <c>Acknowledged</c> tras el envio exitoso, sin esperar respuesta del dispositivo.
+    /// </summary>
+    /// <param name="type">Tipo de comando a verificar.</param>
+    /// <returns><c>true</c> si se espera ACK del dispositivo; <c>false</c> para comandos sin ACK.</returns>
+    bool AckExpected(DeviceCommandType type);
+
+    /// <summary>
     /// Serializa el comando a los bytes de wire correspondientes al protocolo.
     /// </summary>
     /// <param name="command">Comando a serializar.</param>
